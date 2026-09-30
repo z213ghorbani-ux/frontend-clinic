@@ -1,8 +1,7 @@
 import axios from "axios";
 
 // برای استقرار روی سرور Coolify:
-const BACKEND_URL =
-  "http://muganyvxuibi0woi6a0xqxs8.31.171.100.244.sslip.io/api";
+const BACKEND_URL = "http://188.121.114.194:8000/api";
 
 // برای توسعه لوکال در سیستم خودت (در صورت نیاز آن‌کامنت کن):
 // const BACKEND_URL = "http://localhost:8000/api";
@@ -10,7 +9,6 @@ const BACKEND_URL =
 const api = axios.create({
   baseURL: BACKEND_URL,
   headers: {
-    "Content-Type": "application/json",
     Accept: "application/json",
   },
 });
