@@ -1,7 +1,8 @@
 import axios from "axios";
 
+// این مقدار را به آدرس کامل سرور بک‌‌اند خود تغییر بده
 const api = axios.create({
-  baseURL: "/api",
+  baseURL: "http://localhost:8000/api",
   headers: {
     Accept: "application/json",
   },
@@ -9,6 +10,7 @@ const api = axios.create({
 
 api.interceptors.request.use(
   (config) => {
+    // اصلاح کوچکی هم در اینجا انجام دادم که احتمالاً کپی-پیست اشتباه بوده
     const token = localStorage.getItem("token");
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;

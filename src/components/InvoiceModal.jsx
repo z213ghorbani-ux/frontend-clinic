@@ -1,547 +1,556 @@
-import React, { useState, useEffect } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Printer, Check, FileText } from "lucide-react";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { getServiceCode } from "@/constants/services";
+import React, { useRef, useMemo } from "react";
 
-// تابع کمکی برای حل دقیق آدرس مهر پزشک با اولویت stamp_url ارسالی از لاراول
-const resolveStampUrl = (doctorObj, rawStamp) => {
-  if (doctorObj?.stamp_url) {
-    return doctorObj.stamp_url;
-  }
+export default function InvoiceModal({ isOpen, onClose, invoiceData }) {
+  const printAreaRef = useRef();
 
-  const target = rawStamp || doctorObj?.stamp_path || doctorObj?.stamp;
-  if (!target || typeof target !== "string") return null;
-  const trimmed = target.trim();
-  if (trimmed === "" || trimmed === "null" || trimmed === "undefined")
-    return null;
+  // نرمال‌سازی و استخراج داینامیک دیتای دریافتی از بک‌اند لاراول
+  const data = useMemo(() => {
+    if (!invoiceData) return null;
 
-  if (
-    trimmed.startsWith("http://") ||
-    trimmed.startsWith("https://") ||
-    trimmed.startsWith("data:")
-  ) {
-    return trimmed;
-  }
+    const root = invoiceData.data || invoiceData.archive || invoiceData;
+    const formData = root.form_data || root.formData || {};
+    const patientObj = root.patient || formData.patient || {};
+    const doctorObj = root.doctor || formData.doctor || {};
 
-  const cleanPath = trimmed.replace(/^\/?(storage\/)?/, "");
-  return `/storage/${cleanPath}`;
-};
+    // شماره پرونده و کد رهگیری
+    const fileNumber =
+      root.file_number ||
+      formData.file_number ||
+      root.report_id ||
+      formData.report_id ||
+      root.id ||
+      "---";
 
-export default function InvoiceModal({
-  isOpen,
-  onClose,
-  queueItems = [],
-  onConfirmInvoice,
-}) {
-  const [itemPrices, setItemPrices] = useState({});
-  const [discount, setDiscount] = useState(0);
+    const trackingCode =
+      root.tracking_code ||
+      root.invoice_number ||
+      formData.invoice_number ||
+      root.code ||
+      formData.tracking_code ||
+      `INV-${root.id || "0000"}`;
 
-  // استخراج خدمات به همراه اطلاعات کامل بیمار، پزشک و کد خدمت
-  const flattenedServices = (queueItems || []).flatMap((q, qIdx) =>
-    (q.services || []).map((s, sIdx) => {
-      const patientFullName =
-        q.patient?.full_name ||
-        `${q.patient?.first_name || ""} ${q.patient?.last_name || ""}`.trim() ||
-        q.patientName ||
-        "نامشخص";
+    // تاریخ و ساعت صدور
+    const issueDate =
+      root.issue_date ||
+      formData.issue_date ||
+      root.visit_date ||
+      formData.visit_date ||
+      root.created_at_jalali ||
+      formData.date ||
+      "۱۴۰۵/۰۷/۰۸";
 
-      const nationalId =
-        q.patient?.national_id ||
-        q.patient?.national_code ||
-        q.nationalCode ||
-        "---";
+    const issueTime =
+      root.issue_time ||
+      formData.issue_time ||
+      root.time ||
+      formData.time ||
+      "۱۰:۰۹:۲۹";
 
-      const doctorFullName =
-        q.doctor?.name ||
-        q.doctor?.full_name ||
-        s.doctor?.name ||
-        s.doctorName ||
-        q.doctorName ||
-        "---";
+    // اطلاعات بیمار
+    const patientName =
+      patientObj.name ||
+      patientObj.full_name ||
+      [patientObj.first_name, patientObj.last_name].filter(Boolean).join(" ") ||
+      formData.patient_name ||
+      root.patient_name ||
+      "بیمار محترم";
 
-      const doctorObject = q.doctor || s.doctor || null;
-      const rawStamp =
-        q.doctor?.stamp_url ||
-        q.doctor?.stamp_path ||
-        s.doctor?.stamp_url ||
-        s.doctor?.stamp_path ||
-        s.stampUrl ||
-        s.stamp_url ||
-        null;
+    const nationalCode =
+      patientObj.national_code ||
+      patientObj.nationalCode ||
+      formData.national_code ||
+      root.national_code ||
+      "---";
 
-      const doctorStampUrl = resolveStampUrl(doctorObject, rawStamp);
+    const mobile =
+      patientObj.mobile ||
+      patientObj.phone ||
+      formData.mobile ||
+      formData.phone ||
+      root.mobile ||
+      "---";
 
-      const serviceName =
-        s.serviceId === "other"
-          ? s.customName || "سایر خدمات"
-          : s.serviceTitle || s.name || s.title || s.serviceId || "خدمت درمانی";
+    // اطلاعات پزشک معالج و مهر/امضا
+    const doctorName =
+      doctorObj.name ||
+      doctorObj.full_name ||
+      [doctorObj.first_name, doctorObj.last_name].filter(Boolean).join(" ") ||
+      formData.doctor_name ||
+      root.doctor_name ||
+      "دکتر مهدی فتحی";
 
-      const serviceCode =
-        s.service_code || s.serviceCode || getServiceCode(s.serviceId || s.id);
+    const doctorSpecialty =
+      doctorObj.specialty ||
+      formData.doctor_specialty ||
+      "بورد تخصصی قلب و عروق\nفلوشیپ الکتروفیزیولوژیست\nنظام پزشکی: ۱۱۹۱۰۲";
 
-      return {
-        uniqueKey: `${q.tempId || q.id || qIdx}-${s.serviceId || s.id || sIdx}`,
-        tempId: q.tempId || q.id,
-        serviceId: s.serviceId || s.id,
-        serviceCode: serviceCode,
-        patientName: patientFullName,
-        nationalCode: nationalId,
-        doctorName: doctorFullName,
-        doctorStamp: doctorStampUrl,
-        serviceTitle: serviceName,
-        defaultPrice: Number(s.price) || 0,
-      };
-    }),
-  );
+    const doctorSignatureUrl =
+      doctorObj.signature_url ||
+      doctorObj.signatureStampUrl ||
+      formData.doctor_signature ||
+      root.signature_url ||
+      null;
 
-  // هماهنگ‌سازی قیمت‌ها هنگام باز شدن مدال یا تغییر آیتم‌های صف
-  useEffect(() => {
-    if (isOpen) {
-      const initialPrices = {};
-      flattenedServices.forEach((item) => {
-        initialPrices[item.uniqueKey] = item.defaultPrice;
-      });
-      setItemPrices(initialPrices);
-      setDiscount(0);
-    }
-  }, [isOpen, queueItems]);
+    // استخراج و یکپارچه‌سازی لیست خدمات
+    const rawServices =
+      root.services ||
+      formData.services ||
+      root.items ||
+      formData.items ||
+      formData.selectedServices ||
+      [];
 
-  const handlePriceChange = (uniqueKey, value) => {
-    setItemPrices((prev) => ({
-      ...prev,
-      [uniqueKey]: value === "" ? "" : Number(value),
-    }));
-  };
+    const servicesList = Array.isArray(rawServices)
+      ? rawServices.map((item, index) => ({
+          id: index + 1,
+          code: item.code || item.service_code || item.tariff_code || "---",
+          name: item.name || item.title || item.service_name || "خدمت درمانی",
+          doctor: item.doctor_name || item.doctor || doctorName,
+          price: Number(
+            item.price || item.amount || item.tariff || item.cost || 0,
+          ),
+        }))
+      : [];
 
-  // محاسبات مالی
-  const totalPrice = flattenedServices.reduce(
-    (sum, item) => sum + (Number(itemPrices[item.uniqueKey]) || 0),
-    0,
-  );
-  const discountValue = Number(discount) || 0;
-  const payableAmount = Math.max(0, totalPrice - discountValue);
+    // خلاصه خدمات برای گواهی صفحه اول
+    const servicesSummaryText =
+      servicesList.length > 0
+        ? servicesList
+            .map((s) => s.name)
+            .slice(0, 5)
+            .join("، ") + (servicesList.length > 5 ? " و سایر خدمات..." : "")
+        : "ویزیت و خدمات درمانی و بالینی";
 
-  // تابع پرینت
+    // محاسبات مالی
+    const computedTotal = servicesList.reduce(
+      (acc, curr) => acc + curr.price,
+      0,
+    );
+    const totalAmount =
+      root.total_amount || formData.total_amount || computedTotal;
+    const payableAmount =
+      root.payable_amount || formData.payable_amount || totalAmount;
+    const discountAmount =
+      root.discount_amount || formData.discount_amount || 0;
+    const paymentMethod =
+      root.payment_method || formData.payment_method || "نقدی / کارت‌خوان";
+
+    return {
+      fileNumber,
+      trackingCode,
+      issueDate,
+      issueTime,
+      patientName,
+      nationalCode,
+      mobile,
+      doctorName,
+      doctorSpecialty,
+      doctorSignatureUrl,
+      servicesList,
+      servicesSummaryText,
+      totalAmount,
+      discountAmount,
+      payableAmount,
+      paymentMethod,
+    };
+  }, [invoiceData]);
+
+  if (!isOpen || !data) return null;
+
   const handlePrint = () => {
-    const invoiceNumber = `INV-${Date.now().toString().slice(-6)}`;
-    const invoiceDate = new Intl.DateTimeFormat("fa-IR").format(new Date());
-    const invoiceTime = new Date().toLocaleTimeString("fa-IR", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    // استخراج تمام پزشکان یکتا به همراه مهرشان (رفع مشکل نمایش فقط یک مهر)
-    const uniqueDoctorsForPrint = [];
-    const seenDoctorNames = new Set();
-    flattenedServices.forEach((item) => {
-      if (
-        item.doctorName &&
-        item.doctorName !== "---" &&
-        !seenDoctorNames.has(item.doctorName)
-      ) {
-        seenDoctorNames.add(item.doctorName);
-        uniqueDoctorsForPrint.push({
-          name: item.doctorName,
-          stamp: item.doctorStamp || null,
-        });
-      }
-    });
-    if (uniqueDoctorsForPrint.length === 0) {
-      uniqueDoctorsForPrint.push({ name: "پزشک معالج", stamp: null });
-    }
-
-    let rowsHtml = "";
-    flattenedServices.forEach((item, idx) => {
-      const price = Number(itemPrices[item.uniqueKey]) || 0;
-      rowsHtml += `
-      <tr>
-        <td style="text-align:center;border:1px solid #cbd5e1;padding:8px;">${idx + 1}</td>
-        <td style="text-align:center;border:1px solid #cbd5e1;padding:8px;font-family:monospace;font-weight:bold;color:#0f766e;" dir="ltr">${item.serviceCode}</td>
-        <td style="border:1px solid #cbd5e1;padding:8px;font-weight:bold;">${item.serviceTitle}</td>
-        <td style="border:1px solid #cbd5e1;padding:8px;">${item.patientName} (${item.nationalCode})</td>
-        <td style="border:1px solid #cbd5e1;padding:8px;">${item.doctorName}</td>
-        <td style="text-align:center;border:1px solid #cbd5e1;padding:8px;font-family:Tahoma,sans-serif;">
-          ${price.toLocaleString("fa-IR")} تومان
-        </td>
-      </tr>
-    `;
-    });
-
-    // ساخت یک کادر امضا برای هر پزشک یکتا (رفع مشکل نمایش فقط یک مهر)
-    let doctorSignatureBoxesHtml = "";
-    uniqueDoctorsForPrint.forEach((doc) => {
-      doctorSignatureBoxesHtml += `
-    <div class="signature-box">
-      <p class="signature-title">مهر و امضای ${doc.name}</p>
-      <div class="stamp-space">
-        ${
-          doc.stamp
-            ? `<img class="doctor-stamp-img" src="${doc.stamp}" alt="مهر پزشک" />
-               <span class="stamp-placeholder" style="display:none;">محل درج مهر و امضا</span>`
-            : `<span class="stamp-placeholder">محل درج مهر و امضا</span>`
-        }
-      </div>
-      <div class="signature-line"></div>
-    </div>`;
-    });
-
-    const iframe = document.createElement("iframe");
-    iframe.style.position = "fixed";
-    iframe.style.right = "0";
-    iframe.style.bottom = "0";
-    iframe.style.width = "0";
-    iframe.style.height = "0";
-    iframe.style.border = "0";
-    iframe.setAttribute("aria-hidden", "true");
-    document.body.appendChild(iframe);
-
-    const doc = iframe.contentDocument || iframe.contentWindow?.document;
-    if (!doc) {
-      alert("خطا در آماده‌سازی چاپ. لطفاً دوباره تلاش کنید.");
-      document.body.removeChild(iframe);
-      return;
-    }
-
-    const htmlContent = `<!DOCTYPE html>
-<html dir="rtl" lang="fa">
-<head>
-  <meta charset="UTF-8" />
-  <title>صورت‌حساب - ${invoiceNumber}</title>
-  <style>
-    @page { size: A4 portrait; margin: 15mm; }
-    * { box-sizing: border-box; }
-    body { font-family: Tahoma, 'Segoe UI', Arial, sans-serif; direction: rtl; margin: 0; padding: 20px; color: #1e293b; font-size: 13px; }
-    .header { text-align: center; border-bottom: 2px solid #0f766e; padding-bottom: 10px; margin-bottom: 15px; }
-    .header h2 { margin: 0 0 5px; color: #0f766e; font-size: 20px; }
-    .meta-box { display: flex; justify-content: space-between; background: #f8fafc; border: 1px solid #e2e8f0; padding: 10px 14px; border-radius: 6px; margin-bottom: 15px; font-size: 13px; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-    th { background-color: #f1f5f9; color: #334155; padding: 10px; border: 1px solid #cbd5e1; text-align: right; font-size: 13px; }
-    td { font-size: 13px; }
-    .summary-wrap { display: flex; justify-content: flex-end; margin-bottom: 30px; page-break-inside: avoid; }
-    .summary-table { width: 320px; border-collapse: collapse; }
-    .summary-table td { padding: 8px 12px; border: 1px solid #e2e8f0; }
-    .total-row { background: #0f766e; color: #fff; font-weight: bold; }
-    .signatures-container { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 20px; margin-top: 40px; padding: 0 20px; page-break-inside: avoid; }
-    .signature-box { text-align: center; min-width: 180px; max-width: 220px; display: flex; flex-direction: column; align-items: center; }
-    .signature-title { margin: 0 0 10px; font-weight: bold; color: #334155; font-size: 13px; }
-    .stamp-space { height: 90px; width: 100%; display: flex; align-items: center; justify-content: center; margin-bottom: 8px; }
-    .stamp-space img { max-height: 85px; max-width: 170px; object-fit: contain; }
-    .stamp-placeholder { color: #94a3b8; font-size: 12px; border: 1px dashed #cbd5e1; padding: 6px 14px; border-radius: 4px; }
-    .signature-line { border-top: 1px dashed #64748b; width: 180px; margin: 0 auto; }
-    .footer { margin-top: 40px; text-align: center; font-size: 11px; color: #64748b; border-top: 1px dashed #cbd5e1; padding-top: 10px; page-break-inside: avoid; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h2>صورت‌حساب خدمات درمانی کلینیک آریتمی</h2>
-    <p style="margin: 0; color: #64748b; font-size: 13px;">سیستم مدیریت یکپارچه درمانگاه</p>
-  </div>
-
-  <div class="meta-box">
-    <span><strong>شماره فاکتور:</strong> ${invoiceNumber}</span>
-    <span><strong>تاریخ و ساعت:</strong> ${invoiceDate} - ${invoiceTime}</span>
-  </div>
-
-  <table>
-    <thead>
-      <tr>
-        <th style="width: 35px; text-align: center;">#</th>
-        <th style="width: 100px; text-align: center;">کد خدمت</th>
-        <th>عنوان خدمت</th>
-        <th>بیمار (کد ملی)</th>
-        <th>پزشک</th>
-        <th style="width: 140px; text-align: center;">مبلغ</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${rowsHtml}
-    </tbody>
-  </table>
-
-  <div class="summary-wrap">
-    <table class="summary-table">
-      <tr>
-        <td>جمع کل:</td>
-        <td style="text-align: left;">${totalPrice.toLocaleString("fa-IR")} تومان</td>
-      </tr>
-      <tr>
-        <td>تخفیف:</td>
-        <td style="text-align: left;">${discountValue.toLocaleString("fa-IR")} تومان</td>
-      </tr>
-      <tr class="total-row">
-        <td style="border-color: #0f766e;">مبلغ قابل پرداخت:</td>
-        <td style="text-align: left; border-color: #0f766e;">${payableAmount.toLocaleString("fa-IR")} تومان</td>
-      </tr>
-    </table>
-  </div>
-
-  <div class="signatures-container">
-    <div class="signature-box">
-      <p class="signature-title">امضا و تایید پذیرش / صندوق</p>
-      <div class="stamp-space"></div>
-      <div class="signature-line"></div>
-    </div>
-
-    ${doctorSignatureBoxesHtml}
-  </div>
-
-  <div class="footer">
-    این برگه به عنوان تاییدیه مالی و پذیرش خدمات درمانی صادر شده است.
-  </div>
-
-  <script>
-    (function () {
-      function cleanup() {
-        setTimeout(function () {
-          try { parent.document.body.removeChild(frameElement); } catch (e) {}
-        }, 500);
-      }
-
-      function doPrint() {
-        try {
-          window.focus();
-          window.print();
-        } finally {
-          cleanup();
-        }
-      }
-
-      window.onload = function () {
-        var imgs = Array.prototype.slice.call(document.querySelectorAll('.doctor-stamp-img'));
-
-        if (imgs.length === 0) {
-          doPrint();
-          return;
-        }
-
-        var remaining = imgs.length;
-        function settled() {
-          remaining -= 1;
-          if (remaining <= 0) doPrint();
-        }
-
-        imgs.forEach(function (img) {
-          if (img.complete && img.naturalWidth > 0) {
-            settled();
-            return;
-          }
-
-          img.onerror = function () {
-            try {
-              img.style.display = 'none';
-              var ph = img.parentElement.querySelector('.stamp-placeholder');
-              if (ph) ph.style.display = 'inline-block';
-            } catch (e) {}
-            settled();
-          };
-
-          img.onload = settled;
-        });
-      };
-    })();
-  </script>
-</body>
-</html>`;
-
-    doc.open();
-    doc.write(htmlContent);
-    doc.close();
+    window.print();
   };
 
-  // تایید و اعمال نهایی
-  const handleConfirm = () => {
-    const updatedQueue = queueItems.map((q, qIdx) => {
-      const updatedServices = (q.services || []).map((s, sIdx) => {
-        const key = `${q.tempId || q.id || qIdx}-${s.serviceId || s.id || sIdx}`;
-        const code =
-          s.service_code ||
-          s.serviceCode ||
-          getServiceCode(s.serviceId || s.id);
-
-        return {
-          ...s,
-          service_code: code,
-          serviceCode: code,
-          price: Number(itemPrices[key]) || 0,
-        };
-      });
-
-      return {
-        ...q,
-        services: updatedServices,
-      };
-    });
-
-    if (typeof onConfirmInvoice === "function") {
-      onConfirmInvoice({
-        updatedQueue,
-        totalPrice,
-        discount: discountValue,
-        payableAmount,
-      });
-    }
-    onClose();
+  const formatNumber = (num) => {
+    return Number(num || 0).toLocaleString("fa-IR");
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent
-        className="max-w-4xl w-[95vw] lg:max-w-5xl max-h-[90vh] overflow-y-auto p-6"
-        dir="rtl"
-      >
-        <DialogHeader>
-          <DialogTitle className="text-lg font-bold flex items-center justify-between border-b pb-3 text-slate-800">
-            <div className="flex items-center gap-2">
-              <FileText className="w-5 h-5 text-teal-600" />
-              <span>پیش‌فاکتور و تسویه خدمات ثبت‌شده</span>
-            </div>
-            <span className="text-xs font-normal text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
-              تعداد ردیف‌ها: {flattenedServices.length}
-            </span>
-          </DialogTitle>
-        </DialogHeader>
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      {/* استایل‌های پرینت استاندارد ۲ صفحه‌ای A4 */}
+      <style>{`
+        @media print {
+          @page {
+            size: A4 portrait;
+            margin: 10mm 12mm;
+          }
+          body * {
+            visibility: hidden;
+          }
+          #official-invoice-print-area, #official-invoice-print-area * {
+            visibility: visible;
+          }
+          #official-invoice-print-area {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            background: white !important;
+            box-shadow: none !important;
+          }
+          .no-print {
+            display: none !important;
+          }
+          .page-break {
+            page-break-before: always;
+            break-before: page;
+            height: 0;
+            margin: 0;
+          }
+        }
+      `}</style>
 
-        <div className="space-y-5 py-2">
-          <div className="border border-slate-200 rounded-lg overflow-hidden">
-            <Table>
-              <TableHeader className="bg-slate-50">
-                <TableRow>
-                  <TableHead className="w-12 text-center">#</TableHead>
-                  <TableHead className="w-28 text-center font-bold">
-                    کد خدمت
-                  </TableHead>
-                  <TableHead className="text-right font-bold">خدمت</TableHead>
-                  <TableHead className="text-right font-bold">بیمار</TableHead>
-                  <TableHead className="text-right font-bold">پزشک</TableHead>
-                  <TableHead className="text-center w-44 font-bold">
-                    تعرفه / مبلغ (تومان)
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {flattenedServices.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={6}
-                      className="text-center py-6 text-slate-400"
-                    >
-                      هیچ آیتمی برای صدور فاکتور در صف وجود ندارد.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  flattenedServices.map((item, idx) => (
-                    <TableRow
-                      key={item.uniqueKey}
-                      className="hover:bg-slate-50/60"
-                    >
-                      <TableCell className="text-center text-slate-500">
-                        {idx + 1}
-                      </TableCell>
-                      <TableCell className="text-center font-mono font-semibold text-teal-700 bg-teal-50/50 rounded-md">
-                        {item.serviceCode}
-                      </TableCell>
-                      <TableCell className="font-semibold text-slate-800">
-                        {item.serviceTitle}
-                      </TableCell>
-                      <TableCell className="text-sm text-slate-600">
-                        {item.patientName}
-                      </TableCell>
-                      <TableCell className="text-sm text-slate-600">
-                        {item.doctorName}
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          type="number"
-                          value={itemPrices[item.uniqueKey] ?? ""}
-                          placeholder="0"
-                          onChange={(e) =>
-                            handlePriceChange(item.uniqueKey, e.target.value)
-                          }
-                          className="h-9 text-center font-mono font-medium text-sm border-slate-300 focus:border-teal-500"
-                        />
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+      {/* کانتینر مودال */}
+      <div className="relative w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden my-6 flex flex-col max-h-[94vh]">
+        {/* نوار بالای مودال (غیرقابل چاپ) */}
+        <div className="no-print flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-slate-50">
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-3 rounded-full bg-cyan-600 inline-block"></span>
+            <h3 className="text-base font-bold text-gray-800">
+              صورتحساب رسمی مرکز آریتمی تهران (چاپ ۲ صفحه‌ای بیمار)
+            </h3>
           </div>
-
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-wrap gap-4 items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-slate-600">جمع خدمات:</span>
-              <span className="font-bold text-slate-800 font-mono">
-                {totalPrice.toLocaleString("fa-IR")} تومان
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-slate-600">تخفیف کل:</span>
-              <Input
-                type="number"
-                value={discount === 0 ? "" : discount}
-                placeholder="0"
-                onChange={(e) =>
-                  setDiscount(e.target.value === "" ? 0 : e.target.value)
-                }
-                className="w-28 h-9 text-center font-mono text-sm bg-white"
-              />
-              <span className="text-xs text-slate-500">تومان</span>
-            </div>
-
-            <div className="flex items-center gap-2 font-bold text-teal-900 bg-teal-100/70 px-4 py-2 rounded-lg border border-teal-200">
-              <span className="text-sm">مبلغ نهایی:</span>
-              <span className="font-mono text-base">
-                {payableAmount.toLocaleString("fa-IR")} تومان
-              </span>
-            </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handlePrint}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white text-sm font-medium rounded-xl transition-colors shadow-sm cursor-pointer"
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4H7v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
+                />
+              </svg>
+              چاپ فاکتور (A4)
+            </button>
+            <button
+              onClick={onClose}
+              className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-200 transition-colors cursor-pointer"
+            >
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </button>
           </div>
         </div>
 
-        <DialogFooter className="flex flex-row justify-between items-center gap-2 border-t pt-4">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handlePrint}
-            disabled={flattenedServices.length === 0}
-            className="gap-2 border-slate-300"
+        {/* ناحیه محتوا و برگه چاپ */}
+        <div className="overflow-y-auto p-4 md:p-8 bg-slate-100 flex justify-center">
+          <div
+            id="official-invoice-print-area"
+            ref={printAreaRef}
+            dir="rtl"
+            className="w-full max-w-[210mm] bg-white p-8 rounded-lg shadow-sm text-slate-800"
+            style={{ fontFamily: "'Vazirmatn', Tahoma, sans-serif" }}
           >
-            <Printer className="w-4 h-4 text-slate-700" />
-            چاپ فاکتور / PDF
-          </Button>
+            {/* ========================================================================= */}
+            {/* صفحه ۱: اطلاعات پرونده و تاییدیه پزشک */}
+            {/* ========================================================================= */}
+            <div className="min-h-[265mm] flex flex-col justify-between">
+              <div>
+                {/* نوار شماره صفحه */}
+                <div className="bg-slate-100 text-slate-600 text-[10px] font-bold px-3 py-1 rounded flex justify-between items-center mb-4">
+                  <span>صفحه ۱ از ۲ (اطلاعات پرونده و تاییدیه پزشک)</span>
+                  <span>مرکز آریتمی تهران</span>
+                </div>
 
-          <div className="flex items-center gap-2">
-            <Button type="button" variant="ghost" onClick={onClose}>
-              انصراف
-            </Button>
-            <Button
-              type="button"
-              onClick={handleConfirm}
-              disabled={flattenedServices.length === 0}
-              className="bg-teal-600 hover:bg-teal-700 text-white gap-2 px-6"
-            >
-              <Check className="w-4 h-4" />
-              تایید و اعمال قیمت‌ها
-            </Button>
+                {/* سربرگ */}
+                <div className="flex justify-between items-start border-b-2 border-cyan-700 pb-4 mb-4">
+                  <div className="text-right text-[11px] leading-relaxed text-slate-600">
+                    <div>
+                      شماره پرونده / فاکتور:{" "}
+                      <strong className="font-mono text-slate-800">
+                        {data.fileNumber}
+                      </strong>
+                    </div>
+                    <div>
+                      کد رهگیری:{" "}
+                      <strong className="font-mono text-slate-800">
+                        {data.trackingCode}
+                      </strong>
+                    </div>
+                    <div>
+                      تاریخ صدور:{" "}
+                      <span className="font-mono">{data.issueDate}</span>{" "}
+                      {data.issueTime}
+                    </div>
+                  </div>
+
+                  <div className="text-center flex-1 pr-4">
+                    <h1 className="text-xl font-extrabold text-cyan-800 m-0">
+                      مرکز آریتمی تهران
+                    </h1>
+                    <div className="text-[11px] text-slate-500 font-medium mt-0.5">
+                      صورتحساب رسمی خدمات تشخیصی و درمانی
+                    </div>
+                  </div>
+
+                  <div className="text-left w-24">
+                    <div className="text-[10px] font-black tracking-tighter text-cyan-700 leading-tight">
+                      Arrhythmia
+                      <br />
+                      Center
+                    </div>
+                  </div>
+                </div>
+
+                {/* مشخصات بیمار */}
+                <div className="border border-dashed border-slate-300 rounded-lg p-3 bg-slate-50/70 flex justify-between items-center text-xs mb-4">
+                  <div>
+                    بیمار:{" "}
+                    <strong className="text-slate-900 font-bold mr-1">
+                      {data.patientName}
+                    </strong>
+                  </div>
+                  <div>
+                    کد ملی:{" "}
+                    <strong className="font-mono text-slate-900 mr-1">
+                      {data.nationalCode}
+                    </strong>
+                  </div>
+                  <div>
+                    شماره موبایل:{" "}
+                    <strong className="font-mono text-slate-900 mr-1">
+                      {data.mobile}
+                    </strong>
+                  </div>
+                </div>
+
+                {/* متن گواهی بالینی */}
+                <div className="border border-dashed border-slate-300 rounded-lg p-4 bg-white text-xs leading-loose text-justify text-slate-700 mb-8">
+                  آقا/خانم{" "}
+                  <strong className="text-slate-900">{data.patientName}</strong>{" "}
+                  با کد ملی{" "}
+                  <strong className="font-mono text-slate-900">
+                    {data.nationalCode}
+                  </strong>{" "}
+                  در تاریخ <span className="font-mono">{data.issueDate}</span>{" "}
+                  به مرکز آریتمی تهران مراجعه نموده و خدمات
+                  <strong className="text-slate-900">
+                    {" "}
+                    «{data.servicesSummaryText}»{" "}
+                  </strong>{" "}
+                  برای ایشان ثبت و انجام شده است.
+                </div>
+
+                {/* امضا و مهر پزشک صفحه ۱ */}
+                <div className="flex flex-col items-center justify-center text-center mt-6">
+                  <div className="text-xs font-bold text-slate-700">
+                    مهر و امضای پزشک:
+                  </div>
+                  <div className="text-xs font-bold text-slate-900 mt-2">
+                    {data.doctorName}
+                  </div>
+                  <div className="text-[10.5px] text-slate-500 whitespace-pre-line mt-0.5 leading-relaxed">
+                    {data.doctorSpecialty}
+                  </div>
+
+                  <div className="h-24 w-48 flex items-center justify-center my-2">
+                    {data.doctorSignatureUrl ? (
+                      <img
+                        src={data.doctorSignatureUrl}
+                        alt="مهر و امضای پزشک"
+                        className="max-h-20 max-w-full object-contain"
+                      />
+                    ) : (
+                      <div className="border-b border-dashed border-slate-400 w-36 my-6 text-center text-[10px] text-slate-400">
+                        {data.doctorName}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* فوتر صفحه اول */}
+              <div className="border-t border-cyan-700 pt-2 mt-6 flex justify-between items-center text-[10px] text-slate-500">
+                <div>
+                  تهران، خیابان ولیعصر، خیابان توانیر، بالاتر از بیمارستان دی،
+                  ساختمان شماره ۵
+                </div>
+                <div>تلفن: ۸۸۸۸۷۲۷۰-۰۲۱ | وب‌سایت: www.TehranEP.center</div>
+              </div>
+            </div>
+
+            {/* شکست صفحه برای پرینتر */}
+            <div className="page-break" />
+
+            {/* ========================================================================= */}
+            {/* صفحه ۲: ریز اقلام خدمات و تسویه حساب */}
+            {/* ========================================================================= */}
+            <div className="min-h-[265mm] flex flex-col justify-between pt-6 md:pt-0">
+              <div>
+                {/* نوار شماره صفحه */}
+                <div className="bg-slate-100 text-slate-600 text-[10px] font-bold px-3 py-1 rounded flex justify-between items-center mb-4">
+                  <span>صفحه ۲ از ۲ (ریز اقلام خدمات و تسویه حساب)</span>
+                  <span>مرکز آریتمی تهران</span>
+                </div>
+
+                {/* سربرگ صفحه ۲ */}
+                <div className="flex justify-between items-start border-b-2 border-cyan-700 pb-3 mb-4">
+                  <div className="text-right text-[11px] leading-relaxed text-slate-600">
+                    <div>
+                      شماره پرونده / فاکتور:{" "}
+                      <strong className="font-mono text-slate-800">
+                        {data.fileNumber}
+                      </strong>
+                    </div>
+                    <div>
+                      شماره فاکتور:{" "}
+                      <strong className="font-mono text-slate-800">
+                        {data.trackingCode}
+                      </strong>
+                    </div>
+                    <div>
+                      تاریخ صدور:{" "}
+                      <span className="font-mono">{data.issueDate}</span>{" "}
+                      {data.issueTime}
+                    </div>
+                  </div>
+
+                  <div className="text-center flex-1 pr-4">
+                    <h2 className="text-base font-bold text-slate-900 m-0">
+                      ریز اقلام صورتحساب درمانی
+                    </h2>
+                    <div className="text-[11px] text-slate-500 mt-1">
+                      بیمار: {data.patientName} | کد ملی:{" "}
+                      <span className="font-mono">{data.nationalCode}</span>
+                    </div>
+                  </div>
+
+                  <div className="w-24"></div>
+                </div>
+
+                {/* جدول اقلام خدمات */}
+                <table className="w-full border-collapse text-[11px] text-center border border-slate-300 mb-4">
+                  <thead>
+                    <tr className="bg-slate-100 text-slate-800 font-bold border-b border-slate-300">
+                      <th className="p-2 border border-slate-300 w-[6%]">#</th>
+                      <th className="p-2 border border-slate-300 w-[14%]">
+                        کد خدمت
+                      </th>
+                      <th className="p-2 border border-slate-300 text-right pr-3 w-[40%]">
+                        شرح خدمت / آزمایش
+                      </th>
+                      <th className="p-2 border border-slate-300 w-[22%]">
+                        پزشک معالج / متخصص
+                      </th>
+                      <th className="p-2 border border-slate-300 text-left pl-3 w-[18%]">
+                        مبلغ (تومان)
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.servicesList.length > 0 ? (
+                      data.servicesList.map((item) => (
+                        <tr
+                          key={item.id}
+                          className="border-b border-slate-200 hover:bg-slate-50"
+                        >
+                          <td className="p-2 border border-slate-300 font-mono">
+                            {item.id}
+                          </td>
+                          <td className="p-2 border border-slate-300 font-mono">
+                            {item.code}
+                          </td>
+                          <td className="p-2 border border-slate-300 text-right pr-3 font-medium">
+                            {item.name}
+                          </td>
+                          <td className="p-2 border border-slate-300">
+                            {item.doctor}
+                          </td>
+                          <td className="p-2 border border-slate-300 text-left pl-3 font-mono font-bold">
+                            {formatNumber(item.price)}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td
+                          colSpan="5"
+                          className="p-4 text-slate-400 border border-slate-300"
+                        >
+                          هیچ ردیف خدمتی ثبت نشده است.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+
+                {/* خلاصه مبالغ و تسویه */}
+                <div className="w-full max-w-xs mr-auto border border-slate-300 rounded-md overflow-hidden text-xs mb-6">
+                  <div className="flex justify-between items-center p-2 bg-slate-50 border-b border-slate-200">
+                    <span className="text-slate-600">مجموع خدمات:</span>
+                    <span className="font-mono font-bold text-slate-800">
+                      {formatNumber(data.totalAmount)} تومان
+                    </span>
+                  </div>
+
+                  {data.discountAmount > 0 && (
+                    <div className="flex justify-between items-center p-2 bg-rose-50 border-b border-rose-100 text-rose-700">
+                      <span>تخفیف:</span>
+                      <span className="font-mono font-bold">
+                        {formatNumber(data.discountAmount)}- تومان
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-between items-center p-2 bg-emerald-50 text-emerald-800 font-bold border-b border-slate-200">
+                    <span>مبلغ نهایی پرداختی:</span>
+                    <span className="font-mono">
+                      {formatNumber(data.payableAmount)} تومان
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center p-2 bg-slate-50 text-slate-600">
+                    <span>روش پرداخت:</span>
+                    <span>{data.paymentMethod}</span>
+                  </div>
+                </div>
+
+                {/* امضا و مهر پزشک صفحه ۲ */}
+                <div className="flex flex-col items-center justify-center text-center mt-6">
+                  <div className="text-xs font-bold text-slate-700">
+                    مهر و امضای پزشک:
+                  </div>
+                  <div className="text-xs font-bold text-slate-900 mt-1">
+                    {data.doctorName}
+                  </div>
+                  <div className="text-[10px] text-slate-500 whitespace-pre-line leading-relaxed">
+                    {data.doctorSpecialty}
+                  </div>
+                </div>
+              </div>
+
+              {/* فوتر صفحه دوم */}
+              <div className="border-t border-cyan-700 pt-2 mt-6 flex justify-between items-center text-[10px] text-slate-500">
+                <div>
+                  مرکز آریتمی تهران - سامانه رسمی صدور الکترونیک صورتحساب درمان
+                </div>
+                <div>شناسه پیگیری: {data.trackingCode}</div>
+              </div>
+            </div>
           </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </div>
+      </div>
+    </div>
   );
 }

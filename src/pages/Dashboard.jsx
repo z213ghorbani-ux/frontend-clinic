@@ -12,6 +12,7 @@ import {
   Calendar,
   ChevronLeft,
   Lock,
+  Layers,
 } from "lucide-react";
 
 export default function Dashboard({ onLogout }) {
@@ -98,7 +99,7 @@ export default function Dashboard({ onLogout }) {
         </div>
       )}
 
-      {/* Top Navbar */}
+      {/* هدر بالای صفحه */}
       <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-slate-100 shadow-xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -139,9 +140,9 @@ export default function Dashboard({ onLogout }) {
         </div>
       </header>
 
-      {/* Main Content */}
+      {/* محتوای اصلی */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-9">
-        {/* مدیریت سیستم (برای همه نمایش داده می‌شود، ولی با کلیک منشی خطای دسترسی می‌دهد) */}
+        {/* مدیریت سیستم */}
         <section>
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
@@ -156,7 +157,7 @@ export default function Dashboard({ onLogout }) {
             )}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
             {/* پزشکان */}
             <div
               onClick={() => handleAdminOnlyClick("/doctors", "مدیریت پزشکان")}
@@ -217,7 +218,38 @@ export default function Dashboard({ onLogout }) {
               </div>
             </div>
 
-            {/* بایگانی */}
+            {/* خدمات و تعرفه‌ها */}
+            <div
+              onClick={() =>
+                handleAdminOnlyClick("/services", "مدیریت خدمات و تعرفه‌ها")
+              }
+              className={`group bg-white p-5 rounded-2xl border transition-all duration-200 cursor-pointer flex flex-col justify-between ${
+                isAdmin
+                  ? "border-slate-100 hover:border-cyan-200 hover:shadow-lg hover:shadow-cyan-500/10"
+                  : "border-slate-200/70 opacity-80"
+              }`}
+            >
+              <div className="flex items-start justify-between mb-4">
+                <div className="w-10 h-10 rounded-xl bg-cyan-50 text-cyan-600 flex items-center justify-center">
+                  <Layers className="w-5 h-5" />
+                </div>
+                {!isAdmin ? (
+                  <Lock className="w-4 h-4 text-slate-400" />
+                ) : (
+                  <ChevronLeft className="w-4 h-4 text-slate-300 group-hover:text-cyan-500" />
+                )}
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-800 mb-1">
+                  خدمات و تعرفه‌ها
+                </h3>
+                <p className="text-xs text-slate-400 leading-relaxed line-clamp-1">
+                  تعریف اقلام، قیمت‌ها و کدینگ
+                </p>
+              </div>
+            </div>
+
+            {/* بایگانی و سوابق */}
             <div
               onClick={() =>
                 handleAdminOnlyClick("/archive", "بایگانی و سوابق")
@@ -248,7 +280,7 @@ export default function Dashboard({ onLogout }) {
               </div>
             </div>
 
-            {/* گزارش‌ها */}
+            {/* گزارش‌ها و آمار */}
             <div
               onClick={() =>
                 handleAdminOnlyClick("/reports", "گزارش‌ها و آمار")
@@ -330,7 +362,7 @@ export default function Dashboard({ onLogout }) {
                   </p>
                   <button
                     onClick={() => navigate("/results")}
-                    className="inline-flex items-center gap-2 bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-xs transition-colors"
+                    className="inline-flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-xs transition-colors"
                   >
                     <span>
                       {isSecretary2

@@ -1,5 +1,12 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+} from "react";
 import { useNavigate } from "react-router-dom";
+import * as echarts from "echarts";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -31,6 +38,7 @@ import {
   Clock,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   AlertTriangle,
   Download,
   Printer,
@@ -41,12 +49,549 @@ import {
   ClipboardList,
   History,
   Info,
+  BarChart3,
+  Receipt,
+  User,
+  CreditCard,
 } from "lucide-react";
 
 import { PersianDatePicker } from "@/components/ui/persian-datepicker";
 import reportService from "@/services/reportService";
 import { SERVICE_TYPES, getServiceCode } from "@/constants/services";
 
+// ==========================================
+// ۱. کامپوننت داخلی نمودار میله‌ای پیک مراجعات (ECharts Peak Bar Chart)
+// ==========================================
+// ==========================================
+// کامپوننت نمودار تحلیلی عملکرد منشی‌ها و کاربران (EChartsPeakBarChart)
+// ==========================================
+function EChartsPeakBarChart({ reports = [] }) {
+  const chartRef = useRef(null);
+
+  // استخراج و تفکیک دقیق دیتای واقعی لاگ‌ها
+  const { chartData, peakUser, peakTotal } = useMemo(() => {
+    const statsByUser = {};
+
+    // تابع استخراج نام کاربر/منشی
+    const resolveUserName = (item, parentReport) => {
+      const u =
+        item?.user ||
+        item?.creator ||
+        item?.operator ||
+        item?.performed_by ||
+        item?.author ||
+        parentReport?.created_by_user ||
+        parentReport?.creator ||
+        parentReport?.user;
+
+      if (typeof u === "object" && u !== null) {
+        const fullName = [u.first_name, u.last_name]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        if (fullName) return fullName;
+        if (u.name) return u.name;
+        if (u.username) return u.username;
+      } else if (typeof u === "string" && u.trim()) {
+        return u.trim();
+      }
+
+      const flatName =
+        item?.user_name ||
+        item?.userName ||
+        item?.created_by_name ||
+        item?.performed_by_name ||
+        parentReport?.created_by_name ||
+        parentReport?.issued_by_name ||
+        parentReport?.user_name;
+
+      if (flatName && typeof flatName === "string" && flatName.trim()) {
+        return flatName.trim();
+      }
+
+      return "کاربر سیستم";
+    };
+
+    // لیست نرمال پرونده‌ها
+    const recordsList = Array.isArray(reports)
+      ? reports
+      : Array.isArray(reports?.data)
+        ? reports.data
+        : [];
+
+    recordsList.forEach((report) => {
+      // دریافت تمام لاگ‌های مربوط به این پرونده
+      const logs =
+        report?.audit_logs ||
+        report?.history ||
+        report?.hist_users ||
+        report?.form_data?.history ||
+        report?.form_data?.hist_users ||
+        [];
+
+      if (Array.isArray(logs) && logs.length > 0) {
+        // برای هر کاربر در این پرونده، اکشن‌ها را بررسی می‌کنیم
+        const userActionsInReport = {};
+
+        logs.forEach((log) => {
+          const userName = resolveUserName(log, report);
+          if (!userActionsInReport[userName]) {
+            userActionsInReport[userName] = {
+              hasDraft: false,
+              hasSettled: false,
+            };
+          }
+
+          // متن عملیات یا اکشن ثبت‌شده
+          const fullText = [
+            log?.action,
+            log?.description,
+            log?.title,
+            log?.type,
+            log?.event,
+            log?.status,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+
+          // بررسی پیش‌فاکتور / موقت
+          if (
+            fullText.includes("موقت") ||
+            fullText.includes("پیش") ||
+            fullText.includes("draft") ||
+            fullText.includes("create")
+          ) {
+            userActionsInReport[userName].hasDraft = true;
+          }
+
+          // بررسی ثبت نهایی و صدور فاکتور / تسویه
+          if (
+            fullText.includes("نهایی") ||
+            fullText.includes("تسویه") ||
+            fullText.includes("جوابدهی") ||
+            fullText.includes("صورتحساب") ||
+            fullText.includes("settle") ||
+            fullText.includes("final") ||
+            fullText.includes("paid")
+          ) {
+            userActionsInReport[userName].hasSettled = true;
+          }
+        });
+
+        // اعمال آمار یکتا به ازای هر پرونده برای هر کاربر (جلوگیری از ۳ بار ثبت شدن برای یک پرونده)
+        Object.keys(userActionsInReport).forEach((uName) => {
+          if (!statsByUser[uName]) {
+            statsByUser[uName] = { draft: 0, settled: 0 };
+          }
+          if (userActionsInReport[uName].hasDraft) {
+            statsByUser[uName].draft += 1;
+          }
+          if (userActionsInReport[uName].hasSettled) {
+            statsByUser[uName].settled += 1;
+          }
+          // در صورتی که اکشن نامشخص بود ولی کاربر لاگ داشت:
+          if (
+            !userActionsInReport[uName].hasDraft &&
+            !userActionsInReport[uName].hasSettled
+          ) {
+            statsByUser[uName].settled += 1;
+          }
+        });
+      } else {
+        // فال‌بک پرونده‌های بدون لاگ تفصیلی
+        const userName = resolveUserName(null, report);
+        if (!statsByUser[userName]) {
+          statsByUser[userName] = { draft: 0, settled: 0 };
+        }
+
+        const isDraft =
+          report?.status === "draft" ||
+          report?.is_draft === true ||
+          report?.is_draft === 1 ||
+          String(report?.status || "")
+            .toLowerCase()
+            .includes("draft");
+
+        if (isDraft) {
+          statsByUser[userName].draft += 1;
+        } else {
+          statsByUser[userName].settled += 1;
+        }
+      }
+    });
+
+    const categories = Object.keys(statsByUser);
+    const draftData = categories.map((u) => statsByUser[u].draft);
+    const settledData = categories.map((u) => statsByUser[u].settled);
+
+    // محاسبه منشی/کاربر با بیشترین ثبت
+    let bestUser = "بدون فعالیت";
+    let maxTotal = 0;
+
+    categories.forEach((user, index) => {
+      const total = (draftData[index] || 0) + (settledData[index] || 0);
+      if (total > maxTotal) {
+        maxTotal = total;
+        bestUser = user;
+      }
+    });
+
+    if (categories.length > 0 && maxTotal === 0) {
+      bestUser = categories[0];
+    }
+
+    return {
+      chartData: { categories, draftData, settledData },
+      peakUser: bestUser,
+      peakTotal: maxTotal,
+    };
+  }, [reports]);
+
+  // تنظیمات ECharts
+  useEffect(() => {
+    if (!chartRef.current) return;
+    const chartInstance = echarts.init(chartRef.current);
+
+    const isManyUsers = chartData.categories.length > 8;
+
+    const option = {
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "shadow" },
+        backgroundColor: "rgba(15, 23, 42, 0.95)",
+        borderColor: "rgba(255, 255, 255, 0.15)",
+        textStyle: {
+          color: "#f8fafc",
+          fontFamily: "Vazirmatn, Tahoma, sans-serif",
+          fontSize: 12,
+        },
+        formatter: (params) => {
+          let total = 0;
+          let content = `<div style="font-weight: bold; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.2);">${params[0]?.name}</div>`;
+          params.forEach((item) => {
+            const val = Number(item.value) || 0;
+            total += val;
+            content += `
+              <div style="display: flex; justify-content: space-between; gap: 16px; margin-top: 4px; font-size: 11px;">
+                <span>${item.marker} ${item.seriesName}:</span>
+                <span style="font-weight: 700;">${val.toLocaleString("fa-IR")} مورد</span>
+              </div>
+            `;
+          });
+          content += `
+            <div style="display: flex; justify-content: space-between; gap: 16px; margin-top: 6px; padding-top: 4px; border-top: 1px dashed rgba(255,255,255,0.2); font-weight: bold; color: #38bdf8;">
+              <span>مجموع عملکرد:</span>
+              <span>${total.toLocaleString("fa-IR")} مورد</span>
+            </div>
+          `;
+          return content;
+        },
+      },
+      grid: {
+        left: "2%",
+        right: "3%",
+        bottom: isManyUsers ? "16%" : "8%",
+        top: "12%",
+        containLabel: true,
+      },
+      dataZoom: isManyUsers
+        ? [
+            {
+              type: "inside",
+              start: 0,
+              end: Math.min(
+                100,
+                Math.round((7 / chartData.categories.length) * 100),
+              ),
+              zoomOnMouseWheel: true,
+              moveOnMouseMove: true,
+            },
+            {
+              type: "slider",
+              show: true,
+              bottom: 4,
+              height: 14,
+              borderColor: "transparent",
+              backgroundColor: "rgba(148, 163, 184, 0.1)",
+              fillerColor: "rgba(14, 165, 233, 0.25)",
+              handleStyle: { color: "#0ea5e9" },
+              start: 0,
+              end: Math.min(
+                100,
+                Math.round((7 / chartData.categories.length) * 100),
+              ),
+            },
+          ]
+        : [],
+      xAxis: {
+        type: "category",
+        data: chartData.categories,
+        axisLine: { lineStyle: { color: "#94a3b8", opacity: 0.3 } },
+        axisLabel: {
+          fontFamily: "Vazirmatn, Tahoma, sans-serif",
+          fontSize: 11,
+          interval: 0,
+          rotate: chartData.categories.length > 5 ? 30 : 0,
+          color: "#64748b",
+        },
+      },
+      yAxis: {
+        type: "value",
+        minInterval: 1,
+        axisLabel: {
+          fontFamily: "Vazirmatn, Tahoma, sans-serif",
+          fontSize: 11,
+          formatter: (val) => Number(val).toLocaleString("fa-IR"),
+          color: "#64748b",
+        },
+        splitLine: {
+          lineStyle: { type: "dashed", opacity: 0.2 },
+        },
+      },
+      series: [
+        {
+          name: "پیش‌فاکتور / موقت",
+          type: "bar",
+          stack: "total",
+          barMaxWidth: 20,
+          barCategoryGap: "35%",
+          itemStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: "#a855f7" },
+              { offset: 1, color: "#7c3aed" },
+            ]),
+            borderRadius: [0, 0, 3, 3],
+          },
+          data: chartData.draftData,
+        },
+        {
+          name: "ثبت نهایی و تسویه",
+          type: "bar",
+          stack: "total",
+          barMaxWidth: 20,
+          barCategoryGap: "35%",
+          itemStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: "#22d3ee" },
+              { offset: 1, color: "#0891b2" },
+            ]),
+            borderRadius: [4, 4, 0, 0],
+          },
+          data: chartData.settledData,
+        },
+      ],
+    };
+
+    chartInstance.setOption(option, true);
+
+    const handleResize = () => chartInstance.resize();
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      chartInstance.dispose();
+    };
+  }, [chartData]);
+
+  return (
+    <div
+      className="flex h-full w-full flex-col p-4 bg-card/60 backdrop-blur-md rounded-2xl border border-border shadow-xs mb-6"
+      dir="rtl"
+    >
+      {/* هدر آمار و راهنمای رنگ‌ها */}
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border/50 pb-3">
+        <div className="flex flex-col gap-1 text-right">
+          <span className="text-muted-foreground text-xs font-medium">
+            بیشترین فعالیت ثبت پرونده
+          </span>
+          <div className="flex items-baseline gap-2">
+            <span className="text-primary text-2xl sm:text-3xl font-bold tracking-tight">
+              {peakTotal.toLocaleString("fa-IR")}
+            </span>
+            <span className="text-muted-foreground text-xs">
+              پرونده توسط{" "}
+              <span className="text-foreground font-semibold">
+                «{peakUser}»
+              </span>
+            </span>
+          </div>
+        </div>
+
+        {/* Legend */}
+        <div className="flex shrink-0 items-center gap-4 pt-2">
+          <span className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+            <span className="size-2.5 shrink-0 rounded-[3px] bg-[#0891b2] dark:bg-[#22d3ee]" />
+            ثبت نهایی و تسویه
+          </span>
+          <span className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+            <span className="size-2.5 shrink-0 rounded-[3px] bg-[#7c3aed] dark:bg-[#a855f7]" />
+            پیش‌فاکتور / موقت
+          </span>
+        </div>
+      </div>
+
+      {chartData.categories.length === 0 ? (
+        <div className="flex h-56 flex-col items-center justify-center text-muted-foreground text-xs">
+          هنوز داده‌ای برای نمایش عملکرد منشی‌ها در این بازه ثبت نشده است.
+        </div>
+      ) : (
+        <div className="mt-3 min-h-[260px] w-full flex-1" dir="ltr">
+          <div ref={chartRef} className="w-full h-64" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==========================================
+// ۲. کامپوننت داخلی آکاردئون لیست فاکتورها (Invoices Accordion Section)
+// ==========================================
+function InvoicesAccordionSection({
+  reports = [],
+  handleDownloadInvoice,
+  formatPersianDateTime,
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  // فیلتر کردن ردیف‌هایی که دارای صورت‌حساب معتبر هستند
+  const invoiceReports = useMemo(() => {
+    return reports.filter((r) => Boolean(r?.invoice));
+  }, [reports]);
+
+  return (
+    <Card className="shadow-xs border-teal-100 overflow-hidden bg-white">
+      <div
+        onClick={() => setIsOpen((prev) => !prev)}
+        className="p-4 bg-teal-50/50 hover:bg-teal-50 cursor-pointer flex items-center justify-between transition-colors border-b border-teal-100"
+      >
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-teal-600 text-white rounded-lg">
+            <Receipt className="w-4 h-4" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-teal-900">
+              لیست سریع و آکاردئونی فاکتورها
+            </h3>
+            <p className="text-xs text-teal-700/80">
+              دسترسی سریع به فاکتورهای دارای ثبت مالی جهت چاپ مجدد و دانلود
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Badge
+            variant="outline"
+            className="bg-white text-teal-800 border-teal-200 text-xs font-mono"
+          >
+            {invoiceReports.length.toLocaleString("fa-IR")} فاکتور
+          </Badge>
+          <div
+            className={`text-teal-700 transition-transform duration-200 ${
+              isOpen ? "rotate-180" : ""
+            }`}
+          >
+            <ChevronDown className="w-5 h-5" />
+          </div>
+        </div>
+      </div>
+
+      {isOpen && (
+        <CardContent className="p-0">
+          {invoiceReports.length === 0 ? (
+            <div className="text-center py-8 text-xs text-slate-400">
+              در داده‌های این صفحه هیچ فاکتوری یافت نشد.
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
+              {invoiceReports.map((row) => {
+                const inv = row.invoice || {};
+                const amount = Number(
+                  inv.final_amount ?? inv.total_amount ?? 0,
+                );
+                const discount = Number(inv.discount || 0);
+
+                return (
+                  <div
+                    key={`inv-acc-${row.id}`}
+                    className="p-3.5 hover:bg-slate-50 flex items-center justify-between gap-4 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 font-bold text-xs">
+                        <User className="w-4 h-4 text-slate-500" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-xs text-slate-800">
+                            {row.patient?.name || "بیمار نامشخص"}
+                          </span>
+                          <span className="text-[11px] text-slate-400 font-mono">
+                            ({row.patient?.national_code || "-"})
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-[11px] text-slate-500 mt-0.5">
+                          <span>
+                            پرونده:{" "}
+                            <span className="font-mono font-medium">
+                              {row.patient?.case_number || row.id}
+                            </span>
+                          </span>
+                          <span>•</span>
+                          <span>
+                            {formatPersianDateTime(row.created_at)?.date || "-"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                      <div className="text-left">
+                        <div className="text-xs font-bold text-teal-700 font-mono">
+                          {amount.toLocaleString("fa-IR")} تومان
+                        </div>
+                        {discount > 0 && (
+                          <div className="text-[10px] text-rose-500 font-mono">
+                            تخفیف: {discount.toLocaleString("fa-IR")} تومان
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 px-2.5 text-xs gap-1 border-teal-200 text-teal-700 bg-white hover:bg-teal-50"
+                          title="دانلود فایل فاکتور"
+                          onClick={() => handleDownloadInvoice(row, false)}
+                        >
+                          <Download className="w-3.5 h-3.5 text-teal-600" />
+                          <span className="hidden sm:inline">دانلود</span>
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0 text-slate-600 hover:text-teal-700 hover:bg-teal-50"
+                          title="چاپ مستقیم فاکتور"
+                          onClick={() => handleDownloadInvoice(row, true)}
+                        >
+                          <Printer className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+// ==========================================
+// ۳. کامپوننت اصلی ReportsManagement
+// ==========================================
 export default function ReportsManagement() {
   const navigate = useNavigate();
 
@@ -205,11 +750,33 @@ export default function ReportsManagement() {
     }
   };
 
-  // تابع جامع برای استخراج نام دقیق کاربر ثبت‌کننده هر رویداد
+  // تابع کمکی برای فرمت تاریخ در فاکتور چاپی
+  const formatInvoiceJalaliDate = (dateString) => {
+    if (!dateString) return "-";
+    try {
+      const normalized =
+        dateString.includes("T") || dateString.includes("Z")
+          ? dateString
+          : dateString.replace(" ", "T");
+      const d = new Date(normalized);
+      if (isNaN(d.getTime())) return String(dateString).substring(0, 10);
+      return new Intl.DateTimeFormat("fa-IR", {
+        calendar: "persian",
+        numberingSystem: "arabext",
+        timeZone: "Asia/Tehran",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(d);
+    } catch {
+      return String(dateString).substring(0, 10);
+    }
+  };
+
+  // استخراج هوشمند نام دقیق کاربر ثبت‌کننده هر رویداد
   const extractLogUserName = (log, row) => {
     if (!log) return "کاربر سیستم";
 
-    // ۱. بررسی شیء یا فیلد کاربر درون لاگ
     const u = log.user || log.creator || log.operator || log.performed_by;
     if (typeof u === "object" && u !== null) {
       const compositeName = [u.first_name, u.last_name]
@@ -224,7 +791,6 @@ export default function ReportsManagement() {
       return u.trim();
     }
 
-    // ۲. بررسی فیلدهای مسطح نام کاربر در رکورد لاگ
     const flatName =
       log.user_name ||
       log.userName ||
@@ -236,7 +802,6 @@ export default function ReportsManagement() {
       return flatName.trim();
     }
 
-    // ۳. بررسی اطلاعات موجود در رکورد ردیف اصلی به عنوان منبع تکمیلی
     const rowUser =
       row?.issued_by_name ||
       row?.creator?.name ||
@@ -275,7 +840,6 @@ export default function ReportsManagement() {
       service?.service_id;
     if (directCode) return String(directCode);
 
-    // نگاشت نامی پشتیبان
     const nameStr = String(sName).trim();
     if (nameStr.includes("اکو") || nameStr.includes("اکوکاردیوگرافی"))
       return "7001";
@@ -291,10 +855,9 @@ export default function ReportsManagement() {
     return "---";
   };
 
-  // آدرس سرور برای بارگذاری تصویر مهر
   const API_BASE_URL = "http://127.0.0.1:8000";
 
-  // تابع کمکی برای حل آدرس مهر یک پزشک
+  // تابع حل آدرس مهر پزشک
   const resolveDoctorStamp = (doctor) => {
     if (!doctor) return null;
     if (doctor.stamp_url) return doctor.stamp_url;
@@ -305,210 +868,39 @@ export default function ReportsManagement() {
 
   // دانلود و پرینت مستقیم فاکتور نهایی همراه با کد خدمت و مهر و امضای همه پزشکان دخیل
   const handleDownloadInvoice = (row, autoPrint = false) => {
-    const invoice = row?.invoice || {};
-    const patient = row?.patient || {};
-    const queueItems = Array.isArray(invoice?.queueItems)
-      ? invoice.queueItems
-      : [];
-
-    const rows = [];
-    const uniqueDoctorsMap = new Map();
-
-    if (queueItems.length > 0) {
-      queueItems.forEach((q) => {
-        const doctor = q?.doctor || {};
-        const doctorName = doctor?.name || q?.doctorName || "پزشک معالج";
-        const services = Array.isArray(q?.services) ? q.services : [];
-
-        if (!uniqueDoctorsMap.has(doctorName)) {
-          uniqueDoctorsMap.set(doctorName, resolveDoctorStamp(doctor));
-        }
-
-        services.forEach((s) => {
-          rows.push({
-            code: resolveServiceCode(s),
-            name:
-              typeof s === "string"
-                ? s
-                : s?.serviceTitle ||
-                  s?.service_name ||
-                  s?.title ||
-                  s?.name ||
-                  "خدمت درمانی",
-            doctor: doctorName,
-            price: Number(s?.price || s?.amount || 0),
-          });
-        });
-      });
-    } else {
-      const services = Array.isArray(invoice?.services) ? invoice.services : [];
-      const fallbackDoctor = row?.doctor?.name || "پزشک معالج";
-      uniqueDoctorsMap.set(fallbackDoctor, resolveDoctorStamp(row?.doctor));
-      services.forEach((s) => {
-        rows.push({
-          code: resolveServiceCode(s),
-          name:
-            typeof s === "string"
-              ? s
-              : s?.serviceTitle ||
-                s?.service_name ||
-                s?.title ||
-                s?.name ||
-                "خدمت درمانی",
-          doctor: fallbackDoctor,
-          price: Number(s?.price || s?.amount || 0),
-        });
-      });
-    }
-
-    const totalAmount = Number(
-      invoice?.total_amount || rows.reduce((sum, r) => sum + r.price, 0) || 0,
+    // ۱. بررسی فایل پیوست تولید شده در پرونده
+    const attachments = Array.isArray(row?.attachments) ? row.attachments : [];
+    const invoicePdfAttachment = attachments.find(
+      (a) =>
+        (a?.original_name && a.original_name.includes("صورتحساب")) ||
+        (a?.path && a.path.toLowerCase().endsWith(".pdf")),
     );
-    const discount = Number(invoice?.discount || 0);
-    const finalAmount = Number(invoice?.final_amount ?? totalAmount - discount);
 
-    const printWin = window.open("", "_blank", "width=850,height=900");
-    if (!printWin) {
-      alert("لطفاً در مرورگر اجازه باز شدن پنجره Pop-up را بدهید.");
+    // ۲. استخراج شناسه پرونده
+    const recordId = row?.id || row?.invoice?.id;
+
+    if (!recordId) {
+      alert("شناسه پرونده جهت دریافت فاکتور یافت نشد.");
       return;
     }
 
-    let serviceRowsHtml = "";
-    if (rows.length > 0) {
-      serviceRowsHtml = rows
-        .map(
-          (r, idx) => `
-          <tr>
-            <td style="text-align:center; padding: 8px; border: 1px solid #cbd5e1;">${idx + 1}</td>
-            <td style="text-align:center; padding: 8px; border: 1px solid #cbd5e1;">
-              <span style="background: #e6f4ea; color: #137333; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 11px;">
-                ${r.code}
-              </span>
-            </td>
-            <td style="padding: 8px; border: 1px solid #cbd5e1;">${r.name}</td>
-            <td style="padding: 8px; border: 1px solid #cbd5e1;">${r.doctor}</td>
-            <td style="text-align:left; padding: 8px; border: 1px solid #cbd5e1;">${r.price.toLocaleString("fa-IR")} تومان</td>
-          </tr>`,
-        )
-        .join("");
+    // ۳. تعیین آدرس اندپوینت نهایی PDF فاکتور
+    // در صورتی که فایل از قبل ایجاد شده باشد یا تولید مستقیم روی سرور مدنظر باشد
+    let pdfUrl = `${API_BASE_URL}/api/portal/${recordId}/invoice-pdf`;
+
+    if (autoPrint) {
+      // باز کردن مستقیم فاکتور رسمی در تب جدید جهت مشاهده و پرینت
+      window.open(pdfUrl, "_blank", "noopener,noreferrer");
     } else {
-      serviceRowsHtml = `
-        <tr>
-          <td style="text-align:center; padding: 8px; border: 1px solid #cbd5e1;">۱</td>
-          <td style="text-align:center; padding: 8px; border: 1px solid #cbd5e1;">
-            <span style="background: #e6f4ea; color: #137333; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 11px;">1001</span>
-          </td>
-          <td style="padding: 8px; border: 1px solid #cbd5e1;">خدمات ثبت‌شده پرونده</td>
-          <td style="padding: 8px; border: 1px solid #cbd5e1;">پزشک معالج</td>
-          <td style="text-align:left; padding: 8px; border: 1px solid #cbd5e1;">${totalAmount.toLocaleString("fa-IR")} تومان</td>
-        </tr>`;
+      // دانلود مستقیم فایل فاکتور PDF
+      const link = document.createElement("a");
+      link.href = pdfUrl;
+      link.setAttribute("download", `invoice-${recordId}.pdf`);
+      link.target = "_blank";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
-
-    let stampBoxesHtml = "";
-    uniqueDoctorsMap.forEach((stampUrl, doctorName) => {
-      stampBoxesHtml += `
-        <div class="stamp-box">
-          ${
-            stampUrl
-              ? `<img class="doctor-stamp-img" src="${stampUrl}" alt="مهر پزشک" onerror="this.style.display='none'" />`
-              : `<div style="height: 35px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 10px;">(محل مهر و امضا)</div>`
-          }
-          <div style="font-weight: bold; color: #1e293b; font-size: 11px;">مهر و امضای پزشک</div>
-          <div style="font-size: 10px; color: #64748b; margin-top: 2px;">${doctorName}</div>
-        </div>`;
-    });
-
-    const htmlDoc = `
-      <!DOCTYPE html>
-      <html lang="fa" dir="rtl">
-      <head>
-        <meta charset="UTF-8" />
-        <title>فاکتور_${patient.name || "بیمار"}_${row.id}</title>
-        <style>
-          @page { size: A5 landscape; margin: 10mm; }
-          body { font-family: Tahoma, sans-serif; direction: rtl; padding: 15px; margin: 0; font-size: 12px; color: #1e293b; }
-          .card { border: 2px solid #0d9488; border-radius: 8px; padding: 16px; position: relative; }
-          .head { display: flex; justify-content: space-between; border-bottom: 2px solid #ccfbf1; padding-bottom: 8px; margin-bottom: 12px; font-weight: bold; font-size: 14px; color: #0f766e; }
-          .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: #f8fafc; padding: 10px; border-radius: 6px; margin-bottom: 12px; font-size: 11px; }
-          table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
-          th { background: #f1f5f9; border: 1px solid #cbd5e1; padding: 8px; text-align: right; }
-          .footer-section { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px; margin-top: 10px; }
-          .stamp-box {
-            min-width: 150px;
-            text-align: center;
-            border: 1px dashed #0d9488;
-            padding: 8px;
-            border-radius: 6px;
-            background: #fafafa;
-          }
-          .stamp-box img {
-            max-height: 60px;
-            max-width: 120px;
-            object-fit: contain;
-            margin-bottom: 4px;
-            display: block;
-            margin-left: auto;
-            margin-right: auto;
-          }
-          .totals-box { width: 250px; background: #f0fdfa; border: 1px solid #99f6e4; padding: 8px 12px; border-radius: 6px; }
-          .row { display: flex; justify-content: space-between; margin-bottom: 4px; }
-          .final { font-weight: bold; color: #0f766e; border-top: 1px dashed #0d9488; padding-top: 4px; font-size: 13px; }
-          @media print { .no-print { display: none; } }
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <div class="head">
-            <span>صورت‌حساب رسمی درمانگاه</span>
-            <span style="font-size: 12px; color: #475569;">شماره: ${row.id} | تاریخ: ${(row.created_at || "").substring(0, 10)}</span>
-          </div>
-
-          <div class="grid">
-            <div>نام بیمار: <b>${patient.name || "-"}</b></div>
-            <div>کد ملی: <b>${patient.national_code || "-"}</b></div>
-            <div>شماره پرونده: <b>${patient.case_number || row.id}</b></div>
-            <div>تعداد خدمات: <b>${rows.length || 1}</b></div>
-          </div>
-
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 35px; text-align: center;">#</th>
-                <th style="width: 80px; text-align: center;">کد خدمت</th>
-                <th>شرح خدمت / آزمایش</th>
-                <th style="width: 130px;">پزشک</th>
-                <th style="width: 120px; text-align: left;">مبلغ</th>
-              </tr>
-            </thead>
-            <tbody>${serviceRowsHtml}</tbody>
-          </table>
-
-          <div class="footer-section">
-            ${stampBoxesHtml}
-
-            <!-- جدول مبالغ -->
-            <div class="totals-box">
-              <div class="row"><span>جمع کل:</span><span>${totalAmount.toLocaleString("fa-IR")} تومان</span></div>
-              <div class="row"><span>تخفیف:</span><span>${discount.toLocaleString("fa-IR")} تومان</span></div>
-              <div class="row final"><span>مبلغ قابل پرداخت:</span><span>${finalAmount.toLocaleString("fa-IR")} تومان</span></div>
-            </div>
-          </div>
-
-          <div style="margin-top: 15px; text-align: left;" class="no-print">
-            <button onclick="window.print()" style="padding: 6px 14px; background: #0d9488; color: #fff; border: none; border-radius: 4px; cursor: pointer;">چاپ / ذخیره PDF</button>
-          </div>
-        </div>
-
-        <script>
-          ${autoPrint ? "window.onload = function() { window.print(); };" : ""}
-        </script>
-      </body>
-      </html>
-    `;
-
-    printWin.document.open();
-    printWin.document.write(htmlDoc);
-    printWin.document.close();
   };
 
   const getActionIcon = (actionText = "") => {
@@ -556,7 +948,7 @@ export default function ReportsManagement() {
               گزارش‌ها و آمار مراجعین
             </h1>
             <p className="text-xs text-slate-500">
-              سوابق اقدامات کاربران، چرخه خدمات و دانلود فاکتورها
+              سوابق اقدامات کاربران، چرخه خدمات، آمار تردد و دانلود فاکتورها
             </p>
           </div>
         </div>
@@ -570,6 +962,9 @@ export default function ReportsManagement() {
           <span>بازگشت</span>
         </Button>
       </div>
+
+      {/* ۱. بخش نمودار پیک مراجعات (ECharts) */}
+      <EChartsPeakBarChart reports={reports} />
 
       {/* فیلترها */}
       <Card className="shadow-xs border-slate-200">
@@ -636,6 +1031,13 @@ export default function ReportsManagement() {
           </form>
         </CardContent>
       </Card>
+
+      {/* ۲. بخش آکاردئونی فاکتورها */}
+      <InvoicesAccordionSection
+        reports={reports}
+        handleDownloadInvoice={handleDownloadInvoice}
+        formatPersianDateTime={formatPersianDateTime}
+      />
 
       {/* جدول داده‌ها */}
       <Card className="shadow-xs border-slate-200">
@@ -717,7 +1119,6 @@ export default function ReportsManagement() {
                         {/* سوابق و لاگ‌ها */}
                         <TableCell className="text-center">
                           {(() => {
-                            // پشتیبانی از همه منابع احتمالی لاگ
                             let logs =
                               row.audit_logs ||
                               row.history ||
@@ -726,7 +1127,6 @@ export default function ReportsManagement() {
                               row.hist_users ||
                               [];
 
-                            // اگر history به صورت json string برگشته باشد، parse شود
                             if (typeof logs === "string") {
                               try {
                                 logs = JSON.parse(logs);
@@ -780,13 +1180,11 @@ export default function ReportsManagement() {
 
                                     <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                                       {logs.map((log, index) => {
-                                        // استخراج نام کاربر با تابع کمکی جامع
                                         const userName = extractLogUserName(
                                           log,
                                           row,
                                         );
 
-                                        // عنوان و توضیحات اقدام
                                         const actionTitle =
                                           log.action || "اقدام سیستمی";
                                         const actionDesc =
@@ -795,7 +1193,6 @@ export default function ReportsManagement() {
                                           log.description ||
                                           "";
 
-                                        // مدیریت نمایش تاریخ و ساعت
                                         const rawDate =
                                           log.created_at ||
                                           log.date ||

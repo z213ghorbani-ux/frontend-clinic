@@ -1,13 +1,11 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import {
   Users,
   Search,
-  Plus,
   Trash2,
   UserPlus,
   Phone,
-  X,
   ClipboardList,
   ArrowRight,
   Loader2,
@@ -20,17 +18,22 @@ import { PersianDatePicker } from "@/components/ui/persian-datepicker";
 import api from "@/services/api";
 import { toast } from "sonner";
 
-const PAGE_SIZE = 5;
+const PAGE_SIZE = 7;
 
 const normalizePatient = (p) => ({
   id: p.id,
   fullName: p.full_name || "",
   fileNumber: p.file_number || "",
   nationalId: p.national_code || "",
-  gender: p.gender || "",
-  birthDate: p.birth_date || "",
-  phones: p.mobile ? [p.mobile] : [],
+  mobile: p.mobile || "",
   registeredAt: p.created_at ? new Date(p.created_at).getTime() : p.id,
+  registeredAtFormatted: p.created_at
+    ? new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(p.created_at))
+    : "—",
 });
 
 export default function PatientsManagement() {
@@ -40,15 +43,14 @@ export default function PatientsManagement() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // فرم تمیزشده: فقط فیلدهای معتبر و لازم
   const [formData, setFormData] = useState({
     fullName: "",
     fileNumber: "",
     nationalId: "",
-    gender: "",
-    birthDate: null,
+    mobile: "",
   });
 
-  const [phones, setPhones] = useState([""]);
   const [errors, setErrors] = useState({});
   const [search, setSearch] = useState("");
   const [registeredFrom, setRegisteredFrom] = useState(null);
@@ -56,22 +58,7 @@ export default function PatientsManagement() {
   const [page, setPage] = useState(1);
   const [totalFromServer, setTotalFromServer] = useState(0);
 
-  const formatDate = (d) => {
-    if (!d) return "";
-    try {
-      const dateObj = d instanceof Date ? d : new Date(d);
-      if (isNaN(dateObj.getTime())) return "";
-      return new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      }).format(dateObj);
-    } catch {
-      return "";
-    }
-  };
-
-  // دریافت لیست بیماران از سرور (با پشتیبانی از جستجو)
+  // دریافت لیست بیماران از سرور
   const fetchPatients = useCallback(async (searchTerm = "") => {
     try {
       setIsLoading(true);
@@ -81,7 +68,7 @@ export default function PatientsManagement() {
       const res = response.data;
 
       const rawList = Array.isArray(res?.data?.data)
-        ? res.data.data // ساختار paginate لاراول
+        ? res.data.data
         : Array.isArray(res?.data)
           ? res.data
           : Array.isArray(res)
@@ -103,7 +90,7 @@ export default function PatientsManagement() {
     fetchPatients();
   }, [fetchPatients]);
 
-  // دیبانس جستجو: با تایپ کاربر، بعد از ۴۰۰ میلی‌ثانیه از سرور می‌گیریم
+  // دیبانس جستجو
   useEffect(() => {
     const delay = setTimeout(() => {
       fetchPatients(search);
@@ -119,23 +106,17 @@ export default function PatientsManagement() {
       errs.fullName = "نام و نام خانوادگی الزامی است";
     }
 
+    if (!formData.fileNumber.trim()) {
+      errs.fileNumber = "شماره پرونده الزامی است";
+    }
+
     if (!/^\d{10}$/.test(formData.nationalId.trim())) {
       errs.nationalId = "کد ملی باید ۱۰ رقم باشد";
     }
 
-    const validPhones = phones.filter((p) => p.trim());
-    if (validPhones.length === 0) {
-      errs.phones = "حداقل یک شماره موبایل وارد کنید";
-    } else if (validPhones.some((p) => !/^09\d{9}$/.test(p.trim()))) {
-      errs.phones = "شماره موبایل معتبر نیست (مثال: 09121234567)";
-    }
-
-    if (!formData.birthDate) {
-      errs.birthDate = "تاریخ تولد الزامی است";
-    }
-
-    if (!formData.gender) {
-      errs.gender = "جنسیت را انتخاب کنید";
+    // موبایل اختیاری است؛ اما اگر وارد شد باید معتبر باشد
+    if (formData.mobile.trim() && !/^09\d{9}$/.test(formData.mobile.trim())) {
+      errs.mobile = "فرمت موبایل نامعتبر است (مثال: 09121234567)";
     }
 
     return errs;
@@ -152,15 +133,11 @@ export default function PatientsManagement() {
 
     setIsSubmitting(true);
     try {
-      const validPhones = phones.map((p) => p.trim()).filter(Boolean);
-
       const payload = {
         full_name: formData.fullName.trim(),
-        file_number: formData.fileNumber.trim() || null,
+        file_number: formData.fileNumber.trim(),
         national_code: formData.nationalId.trim(),
-        gender: formData.gender,
-        birth_date: formatDate(formData.birthDate),
-        mobile: validPhones[0], // بک‌اند فعلاً فقط یک شماره موبایل ذخیره می‌کند
+        mobile: formData.mobile.trim() || null,
       };
 
       await api.post("/patients", payload);
@@ -170,10 +147,8 @@ export default function PatientsManagement() {
         fullName: "",
         fileNumber: "",
         nationalId: "",
-        gender: "",
-        birthDate: null,
+        mobile: "",
       });
-      setPhones([""]);
       setErrors({});
       setPage(1);
       fetchPatients(search);
@@ -181,8 +156,9 @@ export default function PatientsManagement() {
       console.error("خطای ثبت بیمار:", error);
       const errObj = error.response?.data?.errors;
       const serverMessage =
-        errObj?.full_name?.[0] ||
+        errObj?.file_number?.[0] ||
         errObj?.national_code?.[0] ||
+        errObj?.full_name?.[0] ||
         errObj?.mobile?.[0] ||
         error.response?.data?.message;
       toast.error(serverMessage || "خطا در ثبت بیمار");
@@ -203,7 +179,7 @@ export default function PatientsManagement() {
     }
   };
 
-  // فیلتر تاریخ ثبت روی داده‌ی همین صفحه انجام می‌شود (فیلتر محلی روی نتایج دریافتی)
+  // فیلتر بازه تاریخ ثبت
   const filtered = patients.filter((p) => {
     if (!registeredFrom && !registeredTo) return true;
     const fromTs = registeredFrom
@@ -226,6 +202,7 @@ export default function PatientsManagement() {
   return (
     <div dir="rtl" className="min-h-screen bg-slate-50 p-4 md:p-6">
       <div className="mx-auto max-w-6xl space-y-5">
+        {/* نوار سربرگ */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <Button
@@ -256,202 +233,140 @@ export default function PatientsManagement() {
           </span>
         </div>
 
+        {/* فرم ثبت پرونده بیمار جدید */}
         <Card>
           <CardHeader className="flex-row items-center justify-between border-b border-slate-100">
-            <CardTitle className="flex items-center gap-2">
+            <CardTitle className="flex items-center gap-2 text-base">
               <UserPlus className="h-4 w-4 text-emerald-600" />
               ثبت پرونده بیمار جدید
             </CardTitle>
           </CardHeader>
 
-          <CardContent>
-            <form
-              onSubmit={handleSubmit}
-              className="grid grid-cols-1 gap-4 md:grid-cols-3"
-            >
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-700">
-                  نام و نام خانوادگی <span className="text-red-500">*</span>
-                </label>
-                <Input
-                  value={formData.fullName}
-                  onChange={(e) =>
-                    setFormData({ ...formData, fullName: e.target.value })
-                  }
-                  placeholder="مثال: علی محمدی"
-                  disabled={isSubmitting}
-                  className={errors.fullName ? "border-red-400" : ""}
-                />
-                {errors.fullName && (
-                  <p className="mt-1 text-[11px] text-red-500">
-                    {errors.fullName}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-700">
-                  شماره پرونده
-                </label>
-                <Input
-                  value={formData.fileNumber}
-                  onChange={(e) =>
-                    setFormData({ ...formData, fileNumber: e.target.value })
-                  }
-                  placeholder="مثال: 1403-001"
-                  disabled={isSubmitting}
-                />
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-700">
-                  کد ملی <span className="text-red-500">*</span>
-                </label>
-                <Input
-                  maxLength={10}
-                  value={formData.nationalId}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      nationalId: e.target.value.replace(/\D/g, ""),
-                    })
-                  }
-                  placeholder="۱۰ رقم بدون خط تیره"
-                  disabled={isSubmitting}
-                  className={errors.nationalId ? "border-red-400" : ""}
-                />
-                {errors.nationalId && (
-                  <p className="mt-1 text-[11px] text-red-500">
-                    {errors.nationalId}
-                  </p>
-                )}
-              </div>
-
-              <div className="md:col-span-2">
-                <label className="mb-1.5 block text-xs font-medium text-slate-700">
-                  شماره موبایل <span className="text-red-500">*</span>
-                </label>
-
-                <div className="space-y-2">
-                  {phones.map((phone, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <div className="relative flex-1">
-                        <Phone className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <Input
-                          type="tel"
-                          maxLength={11}
-                          value={phone}
-                          disabled={isSubmitting}
-                          onChange={(e) => {
-                            const next = [...phones];
-                            next[idx] = e.target.value.replace(/\D/g, "");
-                            setPhones(next);
-                          }}
-                          placeholder="09xxxxxxxxx"
-                          className={`pr-9 ${errors.phones ? "border-red-400" : ""}`}
-                        />
-                      </div>
-
-                      {phones.length > 1 && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={() =>
-                            setPhones(phones.filter((_, i) => i !== idx))
-                          }
-                          className="text-slate-400 hover:text-red-500"
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </div>
-                  ))}
+          <CardContent className="pt-5">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-4">
+                {/* نام و نام خانوادگی */}
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-slate-700">
+                    نام و نام خانوادگی <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    value={formData.fullName}
+                    onChange={(e) =>
+                      setFormData({ ...formData, fullName: e.target.value })
+                    }
+                    placeholder="مثال: علی محمدی"
+                    disabled={isSubmitting}
+                    className={errors.fullName ? "border-red-400" : ""}
+                  />
+                  {errors.fullName && (
+                    <p className="mt-1 text-[11px] text-red-500">
+                      {errors.fullName}
+                    </p>
+                  )}
                 </div>
 
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setPhones([...phones, ""])}
-                  className="mt-2 px-2 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
-                >
-                  <Plus className="ml-1 h-3.5 w-3.5" />
-                  افزودن شماره تماس دیگر
-                </Button>
+                {/* شماره پرونده (اجباری) */}
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-slate-700">
+                    شماره پرونده <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    value={formData.fileNumber}
+                    onChange={(e) =>
+                      setFormData({ ...formData, fileNumber: e.target.value })
+                    }
+                    placeholder="مثال: 1403-001"
+                    disabled={isSubmitting}
+                    className={errors.fileNumber ? "border-red-400" : ""}
+                  />
+                  {errors.fileNumber && (
+                    <p className="mt-1 text-[11px] text-red-500">
+                      {errors.fileNumber}
+                    </p>
+                  )}
+                </div>
 
-                {errors.phones && (
-                  <p className="mt-1 text-[11px] text-red-500">
-                    {errors.phones}
-                  </p>
-                )}
-              </div>
+                {/* کد ملی */}
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-slate-700">
+                    کد ملی <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    maxLength={10}
+                    value={formData.nationalId}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        nationalId: e.target.value.replace(/\D/g, ""),
+                      })
+                    }
+                    placeholder="۱۰ رقم کد ملی"
+                    disabled={isSubmitting}
+                    className={errors.nationalId ? "border-red-400" : ""}
+                  />
+                  {errors.nationalId && (
+                    <p className="mt-1 text-[11px] text-red-500">
+                      {errors.nationalId}
+                    </p>
+                  )}
+                </div>
 
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-700">
-                  تاریخ تولد <span className="text-red-500">*</span>
-                </label>
-                <PersianDatePicker
-                  value={formData.birthDate}
-                  onChange={(d) => setFormData({ ...formData, birthDate: d })}
-                  placeholder="انتخاب تاریخ تولد"
-                  error={Boolean(errors.birthDate)}
-                />
-                {errors.birthDate && (
-                  <p className="mt-1 text-[11px] text-red-500">
-                    {errors.birthDate}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-700">
-                  جنسیت <span className="text-red-500">*</span>
-                </label>
-                <div className="flex gap-2">
-                  {[
-                    { val: "male", lbl: "مرد" },
-                    { val: "female", lbl: "زن" },
-                  ].map((g) => (
-                    <Button
-                      key={g.val}
-                      type="button"
-                      variant={
-                        formData.gender === g.val ? "default" : "outline"
-                      }
-                      className="flex-1"
+                {/* شماره موبایل (اختیاری) */}
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-slate-700">
+                    شماره موبایل{" "}
+                    <span className="text-slate-400 font-normal">
+                      (اختیاری)
+                    </span>
+                  </label>
+                  <div className="relative">
+                    <Phone className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <Input
+                      type="tel"
+                      maxLength={11}
+                      value={formData.mobile}
                       disabled={isSubmitting}
-                      onClick={() =>
+                      onChange={(e) =>
                         setFormData({
                           ...formData,
-                          gender: formData.gender === g.val ? "" : g.val,
+                          mobile: e.target.value.replace(/\D/g, ""),
                         })
                       }
-                    >
-                      {g.lbl}
-                    </Button>
-                  ))}
+                      placeholder="09121234567"
+                      className={`pr-9 ${errors.mobile ? "border-red-400" : ""}`}
+                    />
+                  </div>
+                  {errors.mobile && (
+                    <p className="mt-1 text-[11px] text-red-500">
+                      {errors.mobile}
+                    </p>
+                  )}
                 </div>
-
-                {errors.gender && (
-                  <p className="mt-1 text-[11px] text-red-500">
-                    {errors.gender}
-                  </p>
-                )}
               </div>
 
-              <div className="flex justify-end pt-2 md:col-span-3">
-                <Button type="submit" size="lg" disabled={isSubmitting}>
-                  {isSubmitting && (
-                    <Loader2 className="ml-2 h-4 w-4 animate-spin" />
+              <div className="flex justify-end pt-2">
+                <Button
+                  type="submit"
+                  size="default"
+                  disabled={isSubmitting}
+                  className="min-w-[130px]"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="ml-2 h-4 w-4 animate-spin" />
+                      در حال ثبت...
+                    </>
+                  ) : (
+                    "ثبت پرونده بیمار"
                   )}
-                  {isSubmitting ? "در حال ثبت..." : "ثبت پرونده بیمار"}
                 </Button>
               </div>
             </form>
           </CardContent>
         </Card>
 
+        {/* فیلتر و جستجو */}
         <Card>
           <CardContent className="p-4">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -460,7 +375,7 @@ export default function PatientsManagement() {
                 <Input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="جستجو بر اساس نام، کد ملی، شماره موبایل یا پرونده..."
+                  placeholder="جستجو با نام، پرونده، کد ملی یا موبایل..."
                   className="bg-white pr-10"
                 />
               </div>
@@ -501,9 +416,10 @@ export default function PatientsManagement() {
           </CardContent>
         </Card>
 
+        {/* جدول لیست بیماران */}
         <Card className="overflow-hidden">
           <CardHeader className="flex-row items-center justify-between border-b border-slate-100 bg-slate-50/50">
-            <CardTitle className="flex items-center gap-2">
+            <CardTitle className="flex items-center gap-2 text-base">
               <ClipboardList className="h-4 w-4 text-slate-500" />
               لیست بیماران ثبت‌شده
             </CardTitle>
@@ -534,8 +450,7 @@ export default function PatientsManagement() {
                       <th className="px-2 pb-3">شماره پرونده</th>
                       <th className="px-2 pb-3">کد ملی</th>
                       <th className="px-2 pb-3">موبایل</th>
-                      <th className="px-2 pb-3">تاریخ تولد</th>
-                      <th className="px-2 pb-3 text-center">جنسیت</th>
+                      <th className="px-2 pb-3">تاریخ ثبت پرونده</th>
                       <th className="pb-3 pl-2 text-center">عملیات</th>
                     </tr>
                   </thead>
@@ -548,51 +463,31 @@ export default function PatientsManagement() {
                         </td>
 
                         <td className="px-2 py-3">
-                          <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-700">
-                            {p.fileNumber || "—"}
+                          <span className="rounded bg-emerald-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-emerald-700 border border-emerald-200">
+                            {p.fileNumber}
                           </span>
                         </td>
 
                         <td
-                          className="px-2 py-3 font-mono text-slate-500"
+                          className="px-2 py-3 font-mono text-slate-600"
                           dir="ltr"
                         >
                           {p.nationalId}
                         </td>
 
-                        <td className="px-2 py-3 font-mono" dir="ltr">
-                          {p.phones.join(" ، ")}
+                        <td
+                          className="px-2 py-3 font-mono text-slate-600"
+                          dir="ltr"
+                        >
+                          {p.mobile || (
+                            <span className="text-slate-300 font-sans">
+                              ندارد
+                            </span>
+                          )}
                         </td>
 
                         <td className="px-2 py-3 text-slate-500">
-                          {p.birthDate}
-                        </td>
-
-                        <td className="px-2 py-3 text-center">
-                          {(() => {
-                            const isMale =
-                              p.gender === "male" || p.gender === "مرد";
-                            const isFemale =
-                              p.gender === "female" || p.gender === "زن";
-
-                            if (isMale) {
-                              return (
-                                <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600">
-                                  مرد
-                                </span>
-                              );
-                            }
-
-                            if (isFemale) {
-                              return (
-                                <span className="rounded-full bg-pink-50 px-2 py-0.5 text-[10px] font-medium text-pink-600">
-                                  زن
-                                </span>
-                              );
-                            }
-
-                            return <span className="text-slate-400">—</span>;
-                          })()}
+                          {p.registeredAtFormatted}
                         </td>
 
                         <td className="py-3 pl-2 text-center">
@@ -601,6 +496,7 @@ export default function PatientsManagement() {
                             size="icon"
                             onClick={() => handleDelete(p.id)}
                             className="h-8 w-8 text-slate-400 hover:text-red-600"
+                            title="حذف بیمار"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>

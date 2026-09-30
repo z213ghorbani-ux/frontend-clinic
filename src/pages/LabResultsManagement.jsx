@@ -5,19 +5,18 @@ import {
   ArrowRight,
   Paperclip,
   FileText,
-  Receipt,
-  CheckCircle2,
-  Trash2,
   Printer,
   Search,
   Loader2,
   Lock,
+  Unlock,
+  Trash2,
+  CheckCircle2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import InvoiceModal from "@/components/InvoiceModal";
 import {
   Table,
   TableBody,
@@ -27,7 +26,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { PDFDocument } from "pdf-lib";
-import { SERVICE_TYPES, getServiceCode } from "@/constants/services";
+import { getServiceCode } from "@/constants/services";
 
 // تابع کمکی جامع برای خواندن دقیق اطلاعات کاربر لاگین‌شده از LocalStorage
 const getCurrentUser = () => {
@@ -111,32 +110,58 @@ const saveDraftToServer = async ({
   services,
   historyItem,
   currentUser,
+  isLocked = false,
 }) => {
   const fd = new FormData();
-  fd.append("patient_id", patient.id);
-  fd.append("doctor_id", doctor?.id || "");
-  fd.append(
-    "services",
-    JSON.stringify(services.map(({ file, ...rest }) => rest)),
-  );
 
-  if (currentUser?.id) fd.append("user_id", currentUser.id);
-  if (currentUser?.name) fd.append("created_by_name", currentUser.name);
+  fd.append("patient_id", String(patient.id));
+  fd.append("doctor_id", doctor?.id ? String(doctor.id) : "");
+  fd.append("is_locked", isLocked ? "1" : "0");
+
+  // فایل از JSON خدمات حذف می‌شود و جداگانه داخل FormData ارسال می‌گردد.
+  // is_visit را نگه می‌داریم تا Draft بعداً بتواند ویزیت را تشخیص دهد.
+  const cleanServices = services.map(({ file, ...rest }) => ({
+    ...rest,
+    is_visit: Boolean(
+      rest.is_visit ??
+      rest.isVisit ??
+      rest.is_base_visit ??
+      rest.isBaseVisit ??
+      false,
+    ),
+  }));
+
+  fd.append("services", JSON.stringify(cleanServices));
+
+  if (currentUser?.id) {
+    fd.append("user_id", String(currentUser.id));
+  }
+
+  if (currentUser?.name) {
+    fd.append("created_by_name", currentUser.name);
+  }
 
   if (historyItem) {
     fd.append("history_item", JSON.stringify(historyItem));
   }
 
-  services.forEach((s, i) => {
-    if (s.file) {
-      fd.append("files[]", s.file);
-      fd.append("file_indexes[]", i);
-    }
+  // فایل‌های هر خدمت با index همان خدمت ارسال می‌شوند تا Laravel
+  // بتواند فایل را دقیقاً روی services[index].file قرار دهد.
+  services.forEach((service, index) => {
+    if (!service?.file) return;
+
+    fd.append(
+      "files[]",
+      service.file,
+      service.file.name || `attachment-${index}`,
+    );
+    fd.append("file_indexes[]", String(index));
   });
 
-  const res = await api.post("/lab-drafts", fd, {
-    headers: { "Content-Type": "multipart/form-data" },
-  });
+  // Content-Type را دستی تعیین نکن؛ Axios/Browser باید boundary را
+  // برای multipart/form-data خودش بسازد.
+  const res = await api.post("/lab-drafts", fd);
+
   return res.data?.data;
 };
 
@@ -148,6 +173,7 @@ const draftToQueueItem = (draft, patient, doctorsList) => ({
   doctor:
     doctorsList.find((d) => String(d.id) === String(draft.doctor_id)) || null,
   doctorId: draft.doctor_id,
+  isLocked: Boolean(draft.is_locked || draft.locked),
   created_by_name:
     extractUserName(draft) ||
     extractUserName(draft.creator) ||
@@ -155,6 +181,13 @@ const draftToQueueItem = (draft, patient, doctorsList) => ({
     null,
   services: (draft.services || []).map((s) => ({
     ...s,
+    is_visit: Boolean(
+      s.is_visit ??
+      s.isVisit ??
+      s.is_base_visit ??
+      s.isBaseVisit ??
+      s.serviceCode === "visit",
+    ),
     file: null,
     remoteFile: s.file || null,
   })),
@@ -163,7 +196,7 @@ const draftToQueueItem = (draft, patient, doctorsList) => ({
     : new Date().toLocaleTimeString("fa-IR"),
 });
 
-// گرفتن فایل: اگر همین الان در حافظه هست همان، وگرنه دانلود از سرور
+// گرفتن فایل: اگر در حافظه هست همان، وگرنه دانلود از سرور
 const resolveServiceFile = async (draftId, index, s) => {
   if (s.file) return s.file;
   if (!s.remoteFile || !draftId) return null;
@@ -176,7 +209,7 @@ const resolveServiceFile = async (draftId, index, s) => {
   });
 };
 
-// تابع کمکی الصاق مهر پزشک روی فایل PDF
+// تابع الصاق مهر پزشک روی فایل PDF
 const sealPdfFileWithDoctorStamp = async (pdfFile, doctor, options = {}) => {
   const {
     stampWidth = 130,
@@ -225,7 +258,7 @@ const sealPdfFileWithDoctorStamp = async (pdfFile, doctor, options = {}) => {
       try {
         stampImage = await pdfDoc.embedJpg(stampImageBytes);
       } catch (embedErr) {
-        console.error("فرمت مهر پشتیبانی نشد (نه PNG و نه JPG):", embedErr);
+        console.error("فرمت مهر پشتیبانی نشد:", embedErr);
         return pdfFile;
       }
     }
@@ -281,6 +314,16 @@ export default function LabResultsManagement() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
 
+  // استیت خدمات پویا - واکشی از دیتابیس
+  const [servicesList, setServicesList] = useState([]);
+  const [isLoadingServices, setIsLoadingServices] = useState(false);
+
+  // استیت‌های بررسی و قفل ویزیت
+  const [isVisitLocked, setIsVisitLocked] = useState(false);
+  const [hasConfirmedVisit, setHasConfirmedVisit] = useState(false);
+  const [visitLockReason, setVisitLockReason] = useState("");
+  const [isCheckingVisitStatus, setIsCheckingVisitStatus] = useState(false);
+
   // استیت‌های فرم
   const [patientSearch, setPatientSearch] = useState("");
   const [selectedPatient, setSelectedPatient] = useState(null);
@@ -288,30 +331,167 @@ export default function LabResultsManagement() {
   const [selectedDoctorId, setSelectedDoctorId] = useState("");
   const [selectedServices, setSelectedServices] = useState([]);
 
-  // صف موقت و تاریخچه
+  // صف موقت، تاریخچه و لیست نهایی
   const [temporaryQueue, setTemporaryQueue] = useState([]);
   const [histUsers, setHistUsers] = useState([]);
-  const [invoiceCreated, setInvoiceCreated] = useState(false);
   const [finalRecords, setFinalRecords] = useState([]);
 
-  // مودال فاکتور
-  const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
-  const [invoiceData, setInvoiceData] = useState(null);
-
-  // جلوگیری از کلیک مضاعف و ثبت تکراری (Double Submit Protection)
+  // جلوگیری از کلیک مضاعف
   const isSubmittingRef = useRef(false);
 
-  // دسترسی صدور فاکتور: فقط ادمین و منشی سطح ۱
-  // دسترسی صدور فاکتور و ثبت نهایی: ادمین و منشی سطح یک
-  const currentUser = getCurrentUser();
-  const isStaffLevel1 =
-    currentUser.role === "staff_level_1" ||
-    (currentUser.role === "secretary" && currentUser.level === 1) ||
-    currentUser.level === 1;
+  // ۱. دریافت پویا لیست خدمات از سرور
+  useEffect(() => {
+    const fetchServices = async () => {
+      try {
+        setIsLoadingServices(true);
+        const response = await api.get("/services");
+        const res = response.data;
+        const list = Array.isArray(res)
+          ? res
+          : Array.isArray(res?.data)
+            ? res.data
+            : Array.isArray(res?.services)
+              ? res.services
+              : [];
 
-  const canCreateInvoice = currentUser.role === "admin" || isStaffLevel1;
+        if (list.length > 0) {
+          const formatted = list.map((item) => ({
+            id: item.code || item.id || item.slug,
+            code: item.code || item.slug || item.id,
+            slug: item.slug || "",
+            title: item.name || item.title,
+            description: item.description || "",
+            price: Number(item.price || item.tariff || 0),
+            is_visit: Boolean(
+              item.is_visit ??
+              item.isVisit ??
+              item.is_base_visit ??
+              item.isBaseVisit ??
+              false,
+            ),
+            type: item.type || item.service_type || "",
+            category: item.category || item.service_category || "",
+          }));
 
-  // بازیابی صف موقت (پیش‌نویس‌ها) از سرور هنگام تغییر بیمار + بازسازی لاگ‌های کاربران قبلی
+          /*if (!formatted.some((s) => s.id === "other")) {
+            formatted.push({
+              id: "other",
+              title: "سایر خدمات",
+              description: "ثبت دستی",
+              price: 0,
+            });
+          }*/
+
+          setServicesList(formatted);
+        } else {
+          setServicesList([]);
+        }
+      } catch (err) {
+        console.error("خطا در واکشی لیست خدمات از بک‌اند:", err);
+        setServicesList([]);
+      } finally {
+        setIsLoadingServices(false);
+      }
+    };
+
+    fetchServices();
+  }, []);
+
+  // ۲. بررسی وضعیت قفل پرونده و ویزیت بیمار (منطق امنیتی و Fail-Closed)
+  useEffect(() => {
+    if (!selectedPatient?.id) {
+      setIsVisitLocked(false);
+      setHasConfirmedVisit(false);
+      setVisitLockReason("");
+      setIsCheckingVisitStatus(false);
+      return;
+    }
+
+    let isMounted = true;
+
+    const checkVisitStatus = async () => {
+      setIsCheckingVisitStatus(true);
+
+      try {
+        // ۱. بررسی وضعیت پرونده بیمار
+        const patientLocked =
+          selectedPatient.is_locked ||
+          selectedPatient.status === "completed" ||
+          selectedPatient.status === "archived";
+
+        if (patientLocked) {
+          if (isMounted) {
+            setIsVisitLocked(true);
+            setVisitLockReason(
+              "پرونده این بیمار در وضعیت نهایی/بایگانی شده قرار دارد و قفل است.",
+            );
+          }
+          return;
+        }
+
+        // ۲. استعلام وضعیت ویزیت جاری از بک‌اند
+        const res = await api.get(
+          `/visits/status?patient_id=${selectedPatient.id}`,
+        );
+        const visitData = res.data?.data || res.data;
+
+        if (!isMounted) return;
+
+        // وضعیت ویزیت پایه تاییدشده از پاسخ جدید بک‌اند
+        const confirmedVisit = Boolean(
+          res.data?.has_confirmed_visit ??
+          res.data?.data?.has_confirmed_visit ??
+          visitData?.has_confirmed_visit ??
+          false,
+        );
+        setHasConfirmedVisit(confirmedVisit);
+
+        // اگر ویزیت قفل، خاتمه‌یافته یا فاقد پذیرش فعال باشد
+        if (
+          visitData?.is_locked ||
+          visitData?.status === "locked" ||
+          visitData?.status === "completed" ||
+          visitData?.status === "archived"
+        ) {
+          setIsVisitLocked(true);
+          setVisitLockReason(
+            visitData?.lock_reason ||
+              "ویزیت جاری بیمار قفل شده و امکان ویرایش یا افزودن خدمت وجود ندارد.",
+          );
+        } else {
+          // ویزیت معتبر و فعال است
+          setIsVisitLocked(false);
+          setVisitLockReason("");
+        }
+      } catch (e) {
+        console.error("خطا در استعلام وضعیت ویزیت:", e);
+        if (isMounted) {
+          // امنیت Fail-Closed: در صورت بروز خطا، ویزیت و تایید ویزیت پایه
+          // معتبر در نظر گرفته نمی‌شوند.
+          setHasConfirmedVisit(false);
+          setIsVisitLocked(true);
+          setVisitLockReason(
+            "عدم امکان استعلام وضعیت ویزیت از سرور. به دلایل امنیتی امکان ثبت مسدود شد.",
+          );
+          toast.error(
+            "خطا در بررسی وضعیت ویزیت بیمار. جهت اطمینان، دسترسی ثبت موقتاً مسدود گردید.",
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setIsCheckingVisitStatus(false);
+        }
+      }
+    };
+
+    checkVisitStatus();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedPatient]);
+
+  // ۳. بازیابی صف موقت (پیش‌نویس‌ها)
   useEffect(() => {
     const patientId = selectedPatient?.id;
 
@@ -335,8 +515,6 @@ export default function LabResultsManagement() {
         );
         setTemporaryQueue(queueItems);
 
-        // بازیابی تاریخچه‌های ثبت موقت توسط کاربران قبلی با extractUserName
-        // بازیابی تاریخچه‌های ثبت موقت توسط کاربران قبلی
         const recoveredLogs = drafts.map((d) => {
           const doc = doctorsList.find(
             (docItem) => String(docItem.id) === String(d.doctor_id),
@@ -355,7 +533,6 @@ export default function LabResultsManagement() {
             )
             .join("، ");
 
-          // اگر history_item به صورت json ذخیره شده بود، مستقیماً از آن بخواند
           let parsedHistItem = null;
           if (d.history_item) {
             try {
@@ -378,7 +555,7 @@ export default function LabResultsManagement() {
 
           return {
             user: creatorName,
-            user_name: creatorName, // برای سازگاری کامل با هر دو ساختار
+            user_name: creatorName,
             action: "ثبت موقت خدمات",
             action_description: `ثبت موقت خدمات: ${sNames || "ثبت‌شده"} (پزشک: ${docName})`,
             created_at: d.created_at || new Date().toISOString(),
@@ -413,7 +590,7 @@ export default function LabResultsManagement() {
     };
   }, [selectedPatient?.id, doctorsList]);
 
-  // دریافت لیست پزشکان
+  // ۴. دریافت لیست پزشکان
   useEffect(() => {
     const fetchDoctors = async () => {
       try {
@@ -432,10 +609,6 @@ export default function LabResultsManagement() {
                 : [];
 
         setDoctorsList(list);
-
-        if (list.length === 0) {
-          toast.warning("لیست پزشکان خالی است");
-        }
       } catch (error) {
         console.error("خطای دریافت پزشکان:", error);
         setDoctorsList([]);
@@ -448,7 +621,7 @@ export default function LabResultsManagement() {
     fetchDoctors();
   }, []);
 
-  // جستجوی زنده بیماران با Debounce
+  // ۵. جستجوی زنده بیماران
   useEffect(() => {
     if (!patientSearch.trim() || selectedPatient?.full_name === patientSearch) {
       setPatientsSearchResults([]);
@@ -494,44 +667,117 @@ export default function LabResultsManagement() {
     setShowPatientDropdown(false);
   };
 
+  // تشخیص خدمت ویزیت پایه از ساختارهای مختلفی که ممکن است از بک‌اند برگردد.
+  const isBaseVisitService = (service) =>
+    Boolean(
+      service?.is_visit ||
+      service?.isVisit ||
+      service?.is_base_visit ||
+      service?.isBaseVisit ||
+      service?.code === "visit" ||
+      service?.id === "visit" ||
+      service?.serviceId === "visit" ||
+      service?.serviceCode === "visit",
+    );
+
+  // ۱. آیا ویزیتی در فرم بالا انتخاب شده است؟
+  const hasSelectedVisitInForm = selectedServices.some((s) =>
+    isBaseVisitService(s),
+  );
+
+  // ۲. آیا ویزیتی قبلاً به لیست موقت پایین اضافه شده است؟
+  const hasVisitInTemporaryQueue = temporaryQueue.some(
+    (item) =>
+      Array.isArray(item?.services) &&
+      item.services.some((s) => isBaseVisitService(s)),
+  );
+
+  // ۳. وجود ویزیت در هر یک از حالت‌های مجاز
+  const hasAnyVisit =
+    hasSelectedVisitInForm || hasVisitInTemporaryQueue || hasConfirmedVisit;
+
   const handleToggleService = (service) => {
-    const exists = selectedServices.find((s) => s.serviceId === service.id);
-
-    if (exists) {
-      setSelectedServices(
-        selectedServices.filter((s) => s.serviceId !== service.id),
-      );
-    } else {
-      setSelectedServices([
-        ...selectedServices,
-        {
-          serviceId: service.id,
-          serviceCode: getServiceCode(service.id),
-          serviceTitle: service.title,
-          file: null,
-          customName: "",
-        },
-      ]);
+    if (isVisitLocked) {
+      toast.error("پرونده قفل شده است و امکان تغییر خدمات وجود ندارد.");
+      return;
     }
-  };
 
-  const handleCustomNameChange = (val) => {
+    const isVisit = isBaseVisitService(service);
+    const isAlreadySelected = selectedServices.some(
+      (s) => s.serviceId === service.id,
+    );
+
+    // حالت حذف تیک
+    if (isAlreadySelected) {
+      setSelectedServices((prev) =>
+        prev.filter((s) => s.serviceId !== service.id),
+      );
+      return;
+    }
+
+    // حالت افزودن تیک
+    if (isVisit) {
+      // اگر قبلاً در فرم بالا یا لیست موقت پایین ویزیت ثبت شده باشد،
+      // اجازه ثبت ویزیت دوم نداریم.
+      if (hasSelectedVisitInForm || hasVisitInTemporaryQueue) {
+        toast.warning("برای این پذیرش قبلاً یک ویزیت پایه ثبت/انتخاب شده است.");
+        return;
+      }
+    } else {
+      // خدمت جانبی فقط وقتی فعال است که ویزیت در فرم، صف موقت
+      // یا سابقه تاییدشده وجود داشته باشد.
+      if (!hasAnyVisit) {
+        toast.warning("ابتدا باید یک ویزیت پایه انتخاب یا ثبت کنید.");
+        return;
+      }
+    }
+
+    setSelectedServices((prev) => [
+      ...prev,
+      {
+        serviceId: service.id,
+        serviceCode: service.code || "",
+        serviceTitle: service.name || service.title,
+        price: service.price || 0,
+        is_visit: isVisit,
+        code: service.code,
+        file: null,
+        customName: "",
+      },
+    ]);
+  };
+  const handleServiceFileChange = (serviceId, file) => {
     setSelectedServices((prev) =>
-      prev.map((s) =>
-        s.serviceId === "other" ? { ...s, customName: val } : s,
+      prev.map((service) =>
+        String(service.serviceId) === String(serviceId)
+          ? {
+              ...service,
+              file: file || null,
+            }
+          : service,
       ),
     );
   };
 
-  const handleServiceFileChange = (serviceId, file) => {
-    setSelectedServices((prev) =>
-      prev.map((s) => (s.serviceId === serviceId ? { ...s, file } : s)),
-    );
-  };
-
-  // افزودن به صف موقت (ذخیره روی سرور با ثبت دقیق لاگ کاربر جاری)
+  // افزودن به صف موقت
   const handleAddToTemporaryQueue = async (e) => {
     e.preventDefault();
+
+    if (isCheckingVisitStatus) {
+      toast.warning(
+        "سیستم در حال بررسی وضعیت ویزیت بیمار است؛ لطفاً شکیبا باشید.",
+      );
+      return;
+    }
+
+    if (isVisitLocked) {
+      toast.error(
+        visitLockReason ||
+          "پرونده این بیمار قفل شده و امکان ثبت خدمت جدید وجود ندارد.",
+      );
+      return;
+    }
+
     if (!selectedPatient) {
       toast.warning("لطفاً ابتدا بیمار را جستجو و از لیست انتخاب کنید");
       return;
@@ -542,6 +788,13 @@ export default function LabResultsManagement() {
     }
     if (selectedServices.length === 0) {
       toast.warning("حداقل یک نوع جوابدهی انتخاب نمایید");
+      return;
+    }
+
+    // گارد نهایی قبل از ذخیره Draft: ویزیت می‌تواند در فرم بالا،
+    // لیست موقت پایین یا از قبل به‌صورت تاییدشده وجود داشته باشد.
+    if (!hasAnyVisit) {
+      toast.error("ابتدا باید یک ویزیت پایه انتخاب یا ثبت کنید.");
       return;
     }
 
@@ -581,6 +834,7 @@ export default function LabResultsManagement() {
         services: selectedServices,
         historyItem: newHistoryEntry,
         currentUser: loggedUser,
+        isLocked: isVisitLocked,
       });
 
       const baseItem = draftToQueueItem(draft, selectedPatient, doctorsList);
@@ -590,6 +844,7 @@ export default function LabResultsManagement() {
         addedBy: loggedUser,
         services: baseItem.services.map((s, i) => ({
           ...s,
+          price: selectedServices[i]?.price || 0,
           file: selectedServices[i]?.file || null,
         })),
       };
@@ -613,6 +868,11 @@ export default function LabResultsManagement() {
   };
 
   const handleRemoveFromQueue = async (tempId) => {
+    if (isVisitLocked) {
+      toast.error("پرونده قفل است و امکان حذف موارد وجود ندارد.");
+      return;
+    }
+
     const target = temporaryQueue.find((item) => item.tempId === tempId);
     try {
       if (target?.draftId) {
@@ -628,219 +888,18 @@ export default function LabResultsManagement() {
     }
   };
 
-  const handleConfirmInvoice = (invoice) => {
-    setInvoiceData(invoice);
-    setInvoiceCreated(true);
-
-    const loggedUser = getCurrentUser();
-    const invoiceLog = {
-      user: loggedUser.name,
-      user_name: loggedUser.name,
-      user_id: loggedUser.id,
-      action: "صدور صورتحساب",
-      action_description: `صدور فاکتور شماره ${invoice.invoiceNumber || "-"} به مبلغ ${invoice.payableAmount?.toLocaleString("fa-IR") || 0} تومان`,
-      created_at: new Date().toISOString(),
-    };
-
-    setHistUsers((prev) => [
-      ...(Array.isArray(prev)
-        ? prev.filter((h) => h.action !== "صدور صورتحساب")
-        : []),
-      invoiceLog,
-    ]);
-
-    toast.success(
-      `فاکتور ${invoice.invoiceNumber} با مبلغ ${invoice.payableAmount?.toLocaleString("fa-IR")} تومان ثبت شد`,
-    );
-  };
-
-  // ثبت نهایی و ارسال به سرور
-  const handleFinalSubmit = async () => {
-    if (isSubmittingRef.current) return;
-
-    if (!temporaryQueue || temporaryQueue.length === 0) {
-      toast.warning("لیست موقت خالی است");
-      return;
-    }
-
-    isSubmittingRef.current = true;
-    setIsSubmitting(true);
-
-    try {
-      const primaryPatient = temporaryQueue[0].patient;
-      const patientName =
-        primaryPatient.full_name ||
-        `${primaryPatient.first_name || ""} ${primaryPatient.last_name || ""}`.trim();
-      const nationalCode =
-        primaryPatient.national_id ||
-        primaryPatient.national_code ||
-        primaryPatient.nationalId ||
-        "0000000000";
-
-      const formData = new FormData();
-      formData.append("patient_id", primaryPatient.id || "");
-      formData.append("patient_name", patientName);
-      formData.append("national_code", nationalCode);
-      formData.append("file_number", primaryPatient.file_number || "");
-      formData.append(
-        "mobile",
-        primaryPatient.mobile || primaryPatient.phone || "",
-      );
-      formData.append("issued_at", new Date().toISOString());
-
-      const allServices = [];
-      const processedFiles = [];
-
-      for (const queueItem of temporaryQueue) {
-        const itemDoctorId = queueItem.doctor?.id || queueItem.doctorId || "";
-
-        for (const [idx, s] of queueItem.services.entries()) {
-          const serviceItem = {
-            service_code: s.serviceCode || getServiceCode(s.serviceId),
-            serviceCode: s.serviceCode || getServiceCode(s.serviceId),
-            serviceId: s.serviceId,
-            serviceTitle:
-              s.serviceId === "other" ? s.customName || "سایر" : s.serviceTitle,
-            doctorName:
-              queueItem.doctor?.name || queueItem.doctor?.full_name || "نامشخص",
-            doctorId: itemDoctorId,
-          };
-
-          allServices.push(serviceItem);
-
-          const rawFile = await resolveServiceFile(queueItem.draftId, idx, s);
-
-          if (rawFile) {
-            const sealedFile = await sealPdfFileWithDoctorStamp(
-              rawFile,
-              queueItem.doctor,
-              {
-                position: "bottom-left",
-                stampWidth: 130,
-                marginX: 50,
-                marginY: 50,
-                opacity: 0.9,
-              },
-            );
-
-            processedFiles.push(sealedFile);
-            formData.append("files[]", sealedFile);
-            formData.append("file_doctors[]", itemDoctorId);
-          }
-        }
-      }
-
-      const loggedUser = getCurrentUser();
-
-      // فیلتر هرگونه لاگ قبلی ثبت نهایی
-      const cleanHistory = (Array.isArray(histUsers) ? histUsers : []).filter(
-        (h) => h?.action && !String(h.action).includes("ثبت نهایی"),
-      );
-
-      // ثبت نهایی با نام صریح کاربر لاگین‌شده فعلی
-      const completeHistory = [
-        ...cleanHistory,
-        {
-          user: loggedUser.name,
-          user_name: loggedUser.name,
-          user_id: loggedUser.id,
-          action: "ثبت نهایی و صدور جوابدهی",
-          action_description: "پرونده نهایی ثبت، ممهور و بایگانی گردید.",
-          created_at: new Date().toISOString(),
-        },
-      ];
-
-      const payloadData = {
-        hasInvoice: invoiceCreated,
-        invoiceDetails: invoiceData,
-        services: allServices,
-        totalItemsCount: allServices.length,
-        submittedAt: new Date().toISOString(),
-        hist_users: completeHistory,
-        history: completeHistory,
-        final_submitted_by: {
-          ...loggedUser,
-          at: new Date().toISOString(),
-        },
-      };
-
-      formData.append("history", JSON.stringify(completeHistory));
-      formData.append("form_data", JSON.stringify(payloadData));
-
-      const response = await api.post("/archives", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
-      });
-
-      const createdArchiveId = response.data?.data?.id || response.data?.id;
-
-      const uniqueDoctors = Array.from(
-        new Set(
-          temporaryQueue.map(
-            (item) => item.doctor?.name || item.doctor?.full_name,
-          ),
-        ),
-      )
-        .filter(Boolean)
-        .join(" - ");
-
-      const newFinalRecord = {
-        id: createdArchiveId || Date.now(),
-        archiveId: createdArchiveId,
-        patientName: patientName,
-        patientNationalId: nationalCode,
-        doctors: uniqueDoctors,
-        date: new Date().toLocaleDateString("fa-IR"),
-        time: new Date().toLocaleTimeString("fa-IR"),
-        itemsCount: allServices.length,
-        hasInvoice: invoiceCreated,
-        attachedPdfFiles: processedFiles,
-      };
-
-      // پاک کردن درفت‌های سرور
-      await Promise.allSettled(
-        temporaryQueue
-          .filter((item) => item.draftId)
-          .map((item) => api.delete(`/lab-drafts/${item.draftId}`)),
-      );
-
-      setFinalRecords((prev) => [...prev, newFinalRecord]);
-      setTemporaryQueue([]);
-      setHistUsers([]);
-      setSelectedPatient(null);
-      setPatientSearch("");
-      setSelectedDoctorId("");
-      setInvoiceCreated(false);
-      setInvoiceData(null);
-
-      toast.success(
-        response.data?.message || "پرونده جوابدهی با موفقیت در سیستم ثبت شد",
-      );
-    } catch (error) {
-      console.error("خطا در ثبت نهایی:", error);
-      const serverMessage =
-        error.response?.data?.message ||
-        "خطا در ثبت اطلاعات در سرور. لطفاً دوباره تلاش کنید.";
-      toast.error(serverMessage);
-    } finally {
-      isSubmittingRef.current = false;
-      setIsSubmitting(false);
-    }
-  };
-
-  // تابع چاپ فایل‌های یک رکورد نهایی
+  // چاپ فایل‌های یک رکورد با Iframe
   const printRecordPdfs = async (record) => {
     try {
       const files = record?.attachedPdfFiles || [];
       if (files.length === 0) {
         toast.info(
-          "برای این پرونده فایل پیوست مستقیمی در حافظه یافت نشد. می‌توانید از بخش بایگانی پرونده را مشاهده فرمایید.",
+          "فایل پیوست آماده چاپ برای این رکورد یافت نشد (پرونده در بایگانی ذخیره شد).",
         );
         return;
       }
 
-      const toastId = toast.loading("در حال ارسال به پرینتر...");
+      const toastId = toast.loading("در حال آماده‌سازی و ارسال به پرینتر...");
       for (const pdfFile of files) {
         const arrayBuf = await pdfFile.arrayBuffer();
         const blob = new Blob([arrayBuf], { type: "application/pdf" });
@@ -874,19 +933,256 @@ export default function LabResultsManagement() {
       }
     } catch (err) {
       console.error("خطا در پرینت:", err);
-      toast.error("خطا در پرینت پرونده");
+      toast.error("خطا در باز کردن دیالوگ پرینت");
     }
   };
 
-  // صدور و پرینت آخرین پرونده ثبت‌شده
-  const handleExportResult = async () => {
-    if (finalRecords.length === 0) {
-      toast.warning("هنوز پرونده‌ای برای چاپ ثبت نشده است");
+  // ساخت خودکار و پشت‌صحنه دیتای فاکتور از اقلام صف موقت
+  const generateAutoInvoiceData = () => {
+    const items = [];
+    let totalAmount = 0;
+
+    temporaryQueue.forEach((qItem) => {
+      (qItem.services || []).forEach((s) => {
+        const foundDef = servicesList.find((srv) => srv.id === s.serviceId);
+        const itemPrice = Number(s.price || foundDef?.price || 0);
+        totalAmount += itemPrice;
+
+        items.push({
+          serviceId: s.serviceId,
+          serviceTitle:
+            s.serviceId === "other" ? s.customName || "سایر" : s.serviceTitle,
+          price: itemPrice,
+          count: 1,
+          total: itemPrice,
+        });
+      });
+    });
+
+    const invoiceNumber = `INV-${Date.now().toString().slice(-6)}`;
+
+    return {
+      invoiceNumber,
+      items,
+      totalAmount,
+      payableAmount: totalAmount,
+      discount: 0,
+      paymentMethod: "cash",
+      status: "paid",
+      created_at: new Date().toISOString(),
+    };
+  };
+
+  // کلید عملیات جامع (Master Action): ساخت فاکتور -> ثبت نهایی -> پرینت خودکار
+  const handleMasterSubmitAndPrint = async () => {
+    if (isSubmittingRef.current) return;
+
+    if (isVisitLocked) {
+      toast.error("این پرونده در وضعیت قفل قرار دارد و امکان ثبت ندارد.");
       return;
     }
 
-    const lastRecord = finalRecords[finalRecords.length - 1];
-    await printRecordPdfs(lastRecord);
+    if (!temporaryQueue || temporaryQueue.length === 0) {
+      toast.warning("لیست موقت خالی است؛ ابتدا حداقل یک خدمت اضافه کنید");
+      return;
+    }
+
+    // گارد نهایی ثبت پرونده: حداقل یک ویزیت باید در فرم،
+    // لیست موقت یا سابقه تاییدشده وجود داشته باشد.
+    if (!hasAnyVisit) {
+      toast.error("برای ثبت نهایی ابتدا باید یک ویزیت پایه انتخاب یا ثبت شود.");
+      return;
+    }
+
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
+
+    try {
+      const loggedUser = getCurrentUser();
+      const primaryPatient = temporaryQueue[0].patient;
+      const patientName =
+        primaryPatient.full_name ||
+        `${primaryPatient.first_name || ""} ${primaryPatient.last_name || ""}`.trim();
+      const nationalCode =
+        primaryPatient.national_id ||
+        primaryPatient.national_code ||
+        primaryPatient.nationalId ||
+        "0000000000";
+
+      // ۱. صدور خودکار و پشت صحنه فاکتور
+      const autoInvoice = generateAutoInvoiceData();
+      const invoiceLog = {
+        user: loggedUser.name,
+        user_name: loggedUser.name,
+        user_id: loggedUser.id,
+        action: "صدور صورتحساب",
+        action_description: `صدور خودکار فاکتور شماره ${autoInvoice.invoiceNumber} به مبلغ ${autoInvoice.payableAmount.toLocaleString("fa-IR")} تومان`,
+        created_at: new Date().toISOString(),
+      };
+
+      // ۲. ساخت فرم دیتا و آماده‌سازی فایل‌ها
+      const formData = new FormData();
+      formData.append("patient_id", primaryPatient.id || "");
+      formData.append("patient_name", patientName);
+      formData.append("national_code", nationalCode);
+      formData.append("file_number", primaryPatient.file_number || "");
+      formData.append(
+        "mobile",
+        primaryPatient.mobile || primaryPatient.phone || "",
+      );
+      formData.append("issued_at", new Date().toISOString());
+      formData.append("is_locked", "1");
+
+      const allServices = [];
+      const processedFiles = [];
+
+      for (const queueItem of temporaryQueue) {
+        const itemDoctorId = queueItem.doctor?.id || queueItem.doctorId || "";
+
+        for (const [idx, s] of queueItem.services.entries()) {
+          const serviceItem = {
+            service_code:
+              s.serviceCode ||
+              (getServiceCode ? getServiceCode(s.serviceId) : s.serviceId),
+            serviceCode:
+              s.serviceCode ||
+              (getServiceCode ? getServiceCode(s.serviceId) : s.serviceId),
+            serviceId: s.serviceId,
+            serviceTitle:
+              s.serviceId === "other" ? s.customName || "سایر" : s.serviceTitle,
+            doctorName:
+              queueItem.doctor?.name || queueItem.doctor?.full_name || "نامشخص",
+            doctorId: itemDoctorId,
+          };
+
+          allServices.push(serviceItem);
+
+          const rawFile = await resolveServiceFile(queueItem.draftId, idx, s);
+
+          if (rawFile) {
+            const sealedFile = await sealPdfFileWithDoctorStamp(
+              rawFile,
+              queueItem.doctor,
+              {
+                position: "bottom-left",
+                stampWidth: 130,
+                marginX: 50,
+                marginY: 50,
+                opacity: 0.9,
+              },
+            );
+
+            processedFiles.push(sealedFile);
+            formData.append("files[]", sealedFile);
+            formData.append("file_doctors[]", itemDoctorId);
+          }
+        }
+      }
+
+      // تاریخچه لاگ‌ها
+      const cleanHistory = (Array.isArray(histUsers) ? histUsers : []).filter(
+        (h) => h?.action && !String(h.action).includes("ثبت نهایی"),
+      );
+
+      const completeHistory = [
+        ...cleanHistory,
+        invoiceLog,
+        {
+          user: loggedUser.name,
+          user_name: loggedUser.name,
+          user_id: loggedUser.id,
+          action: "ثبت نهایی و صدور جوابدهی",
+          action_description:
+            "پرونده نهایی ثبت، صورتحساب صادر، ممهور و قفل بایگانی گردید.",
+          created_at: new Date().toISOString(),
+        },
+      ];
+
+      const payloadData = {
+        hasInvoice: true,
+        invoiceDetails: autoInvoice,
+        services: allServices,
+        totalItemsCount: allServices.length,
+        submittedAt: new Date().toISOString(),
+        hist_users: completeHistory,
+        history: completeHistory,
+        is_locked: true,
+        final_submitted_by: {
+          ...loggedUser,
+          at: new Date().toISOString(),
+        },
+      };
+
+      formData.append("history", JSON.stringify(completeHistory));
+      formData.append("form_data", JSON.stringify(payloadData));
+
+      // ۳. ارسال نهایی به سرور
+      // Content-Type را دستی تعیین نمی‌کنیم تا boundary صحیح multipart توسط
+      // Axios/Browser ساخته شود و فایل‌های پیوست بدون مشکل به Laravel برسند.
+      const response = await api.post("/archives", formData);
+
+      const createdArchiveId = response.data?.data?.id || response.data?.id;
+
+      const uniqueDoctors = Array.from(
+        new Set(
+          temporaryQueue.map(
+            (item) => item.doctor?.name || item.doctor?.full_name,
+          ),
+        ),
+      )
+        .filter(Boolean)
+        .join(" - ");
+
+      const newFinalRecord = {
+        id: createdArchiveId || Date.now(),
+        archiveId: createdArchiveId,
+        patientName: patientName,
+        patientNationalId: nationalCode,
+        doctors: uniqueDoctors,
+        date: new Date().toLocaleDateString("fa-IR"),
+        time: new Date().toLocaleTimeString("fa-IR"),
+        itemsCount: allServices.length,
+        hasInvoice: true,
+        isLocked: true,
+        attachedPdfFiles: processedFiles,
+      };
+
+      // ۴. چاپ فوری و خودکار جوابدهی بلافاصله بعد از ثبت موفقیت‌آمیز
+      if (processedFiles.length > 0) {
+        printRecordPdfs(newFinalRecord);
+      }
+
+      // ۵. پاکسازی درفت‌های موقت
+      await Promise.allSettled(
+        temporaryQueue
+          .filter((item) => item.draftId)
+          .map((item) => api.delete(`/lab-drafts/${item.draftId}`)),
+      );
+
+      // ۶. به‌روزرسانی استیت‌ها
+      setFinalRecords((prev) => [...prev, newFinalRecord]);
+      setTemporaryQueue([]);
+      setHistUsers([]);
+      setSelectedPatient(null);
+      setPatientSearch("");
+      setSelectedDoctorId("");
+      setIsVisitLocked(false);
+      setHasConfirmedVisit(false);
+      setVisitLockReason("");
+
+      toast.success(
+        "پرونده با موفقیت ثبت نهایی شد، صورتحساب خودکار صادر گردید و دستور چاپ ارسال شد.",
+      );
+    } catch (error) {
+      console.error("خطا در ثبت نهایی:", error);
+      const serverMessage =
+        error.response?.data?.message ||
+        "خطا در ثبت اطلاعات در سرور. لطفاً دوباره تلاش کنید.";
+      toast.error(serverMessage);
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -917,12 +1213,60 @@ export default function LabResultsManagement() {
       </div>
 
       <div className="max-w-6xl mx-auto space-y-6">
+        {/* هشدار قفل پرونده */}
+        {isVisitLocked && (
+          <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 flex items-center gap-3 text-amber-800 animate-in fade-in">
+            <Lock className="w-5 h-5 text-amber-600 flex-shrink-0" />
+            <div className="text-sm">
+              <span className="font-bold">پرونده قفل است: </span>
+              {visitLockReason ||
+                "این ویزیت نهایی شده و امکان ویرایش یا افزودن خدمات جدید وجود ندارد."}
+            </div>
+          </div>
+        )}
+
         {/* ۱. فرم ورود اطلاعات */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-          <h2 className="text-base font-semibold border-b pb-3 mb-5 flex items-center gap-2">
-            <FileText className="w-5 h-5 text-primary" />
-            ورود اطلاعات و انتخاب خدمات بیمار
-          </h2>
+          <div className="flex justify-between items-center border-b pb-3 mb-5">
+            <h2 className="text-base font-semibold flex items-center gap-2">
+              <FileText className="w-5 h-5 text-primary" />
+              ورود اطلاعات و انتخاب خدمات بیمار
+            </h2>
+            {selectedPatient && (
+              <Badge
+                variant={
+                  isCheckingVisitStatus
+                    ? "secondary"
+                    : isVisitLocked
+                      ? "destructive"
+                      : "outline"
+                }
+                className="gap-1.5"
+              >
+                {isCheckingVisitStatus ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin text-primary" />
+                    در حال استعلام ویزیت...
+                  </>
+                ) : isVisitLocked ? (
+                  <>
+                    <Lock className="w-3 h-3" />
+                    ویزیت قفل‌شده / غیرفعال
+                  </>
+                ) : hasConfirmedVisit ? (
+                  <>
+                    <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                    ویزیت پایه: تایید و تسویه شده
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-3 h-3 text-amber-500" />
+                    ویزیت پایه: نیازمند ثبت و تسویه
+                  </>
+                )}
+              </Badge>
+            )}
+          </div>
 
           <form onSubmit={handleAddToTemporaryQueue} className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1015,7 +1359,9 @@ export default function LabResultsManagement() {
                 <select
                   value={selectedDoctorId}
                   onChange={(e) => setSelectedDoctorId(e.target.value)}
-                  disabled={isLoadingDoctors}
+                  disabled={
+                    isLoadingDoctors || isVisitLocked || isCheckingVisitStatus
+                  }
                   className="w-full h-10 px-3 rounded-md border border-slate-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:bg-slate-100"
                 >
                   <option value="">
@@ -1062,72 +1408,161 @@ export default function LabResultsManagement() {
 
             {/* لیست خدمات */}
             <div>
-              <label className="block text-sm font-medium mb-3">
-                نوع جوابدهی (امکان انتخاب همزمان):
-              </label>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 border rounded-lg p-4 bg-slate-50/50">
-                {SERVICE_TYPES.map((service) => {
-                  const isChecked = selectedServices.some(
-                    (s) => s.serviceId === service.id,
-                  );
-                  return (
-                    <div
-                      key={service.id}
-                      className={`p-3 rounded-lg border transition-all ${
-                        isChecked
-                          ? "bg-white border-primary shadow-sm"
-                          : "bg-white/60 border-slate-200"
-                      }`}
-                    >
-                      <label className="flex items-center gap-2 cursor-pointer mb-2">
-                        <input
-                          type="checkbox"
-                          className="rounded text-primary focus:ring-primary w-4 h-4"
-                          checked={isChecked}
-                          onChange={() => handleToggleService(service)}
-                        />
-                        <span className="text-sm font-medium">
-                          {service.title}
-                        </span>
-                      </label>
+              <div className="flex justify-between items-center mb-3 gap-3">
+                <label className="block text-sm font-medium">
+                  نوع جوابدهی (امکان انتخاب همزمان):
+                </label>
 
-                      {isChecked && (
-                        <div className="mt-2 space-y-2">
-                          <input
-                            type="file"
-                            accept="application/pdf,image/*"
-                            onChange={(e) =>
-                              handleServiceFileChange(
-                                service.id,
-                                e.target.files[0],
-                              )
-                            }
-                            className="text-xs block w-full file:mr-0 file:ml-2 file:py-1 file:px-2 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20"
-                          />
-
-                          {service.id === "other" && (
-                            <Input
-                              placeholder="عنوان خدمت را وارد کنید..."
-                              className="h-8 text-xs mt-1"
-                              onChange={(e) =>
-                                handleCustomNameChange(e.target.value)
-                              }
-                            />
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                {selectedPatient && !isCheckingVisitStatus && (
+                  <Badge
+                    variant={hasConfirmedVisit ? "outline" : "secondary"}
+                    className={
+                      hasConfirmedVisit
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : "border-amber-200 bg-amber-50 text-amber-700"
+                    }
+                  >
+                    {hasConfirmedVisit
+                      ? "ویزیت پایه تایید شده؛ سایر خدمات فعال هستند"
+                      : hasAnyVisit
+                        ? "ویزیت پایه انتخاب/ثبت شده؛ سایر خدمات فعال هستند"
+                        : "ابتدا یک ویزیت پایه انتخاب کنید"}
+                  </Badge>
+                )}
               </div>
+
+              {isLoadingServices ? (
+                <div className="p-4 text-center text-sm text-gray-500 border rounded-lg bg-slate-50/50 flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  در حال بارگذاری لیست خدمات از سامانه...
+                </div>
+              ) : servicesList.length === 0 ? (
+                <div className="p-4 text-center text-sm text-amber-700 bg-amber-50 rounded-lg border border-amber-200">
+                  هیچ خدمتی در سامانه تعریف نشده است. لطفاً ابتدا از بخش مدیریت
+                  خدمات، خدمات مورد نظر را ثبت کنید.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 border rounded-lg p-4 bg-slate-50/50">
+                  {servicesList.map((service) => {
+                    const isVisit = isBaseVisitService(service);
+                    const isChecked = selectedServices.some(
+                      (s) => s.serviceId === service.id,
+                    );
+
+                    // ویزیت قفل است اگر پرونده قفل باشد یا قبلاً
+                    // ویزیتی در فرم/لیست موقت ثبت شده باشد.
+                    // خدمات غیر ویزیت نیز فقط با وجود یک ویزیت فعال می‌شوند.
+                    const isDisabled =
+                      isVisitLocked ||
+                      (isVisit &&
+                        (hasSelectedVisitInForm || hasVisitInTemporaryQueue) &&
+                        !isChecked) ||
+                      (!isVisit && !hasAnyVisit);
+
+                    return (
+                      <div
+                        key={service.id}
+                        className={`p-3 rounded-lg border transition-all ${
+                          isChecked
+                            ? "bg-white border-primary shadow-sm"
+                            : "bg-white/60 border-slate-200"
+                        } ${isDisabled ? "opacity-60 cursor-not-allowed" : ""}`}
+                        title={
+                          !isVisit && !hasAnyVisit
+                            ? "ابتدا یک ویزیت پایه انتخاب یا ثبت کنید."
+                            : undefined
+                        }
+                      >
+                        <label
+                          className={`flex items-center gap-2 mb-2 ${
+                            isDisabled ? "cursor-not-allowed" : "cursor-pointer"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            disabled={isDisabled}
+                            className="rounded text-primary focus:ring-primary w-4 h-4 disabled:opacity-50"
+                            checked={isChecked}
+                            onChange={() => handleToggleService(service)}
+                          />
+                          <span className="text-sm font-medium">
+                            {service.title}
+                          </span>
+                          {isVisit && (
+                            <Badge
+                              variant="outline"
+                              className="mr-auto text-[10px] border-emerald-200 text-emerald-700"
+                            >
+                              ویزیت پایه
+                            </Badge>
+                          )}
+                        </label>
+
+                        {!isVisit && !hasAnyVisit && (
+                          <p className="text-[11px] text-amber-600 mt-1">
+                            پس از انتخاب یا ثبت ویزیت پایه فعال می‌شود.
+                          </p>
+                        )}
+
+                        {isChecked && (
+                          <div className="mt-2 space-y-2">
+                            <input
+                              type="file"
+                              disabled={isVisitLocked}
+                              accept="application/pdf,image/*"
+                              onChange={(e) =>
+                                handleServiceFileChange(
+                                  service.id,
+                                  e.target.files[0],
+                                )
+                              }
+                              className="text-xs block w-full file:mr-0 file:ml-2 file:py-1 file:px-2 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20 disabled:opacity-50"
+                            />
+
+                            {service.id === "other" && (
+                              <Input
+                                placeholder="عنوان خدمت را وارد کنید..."
+                                disabled={isVisitLocked}
+                                className="h-8 text-xs mt-1"
+                                onChange={(e) =>
+                                  handleCustomNameChange(e.target.value)
+                                }
+                              />
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end">
-              <Button type="submit" className="gap-2" disabled={isSavingDraft}>
+              <Button
+                type="submit"
+                className="gap-2"
+                disabled={
+                  isSavingDraft ||
+                  isVisitLocked ||
+                  isCheckingVisitStatus ||
+                  !selectedPatient
+                }
+              >
                 {isSavingDraft ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     در حال ذخیره...
+                  </>
+                ) : isCheckingVisitStatus ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    در حال تایید ویزیت...
+                  </>
+                ) : isVisitLocked ? (
+                  <>
+                    <Lock className="w-4 h-4" />
+                    پرونده قفل است
                   </>
                 ) : (
                   "افزودن به لیست موقت"
@@ -1137,7 +1572,7 @@ export default function LabResultsManagement() {
           </form>
         </div>
 
-        {/* ۲. جدول صف موقت */}
+        {/* ۲. جدول صف موقت و دکمه واحد عملیات */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
           <div className="flex justify-between items-center mb-4 border-b pb-3">
             <h3 className="font-semibold text-base">
@@ -1208,7 +1643,8 @@ export default function LabResultsManagement() {
                       <Button
                         size="icon"
                         variant="ghost"
-                        className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                        disabled={isVisitLocked}
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50 disabled:opacity-30"
                         onClick={() => handleRemoveFromQueue(item.tempId)}
                       >
                         <Trash2 className="w-4 h-4" />
@@ -1220,60 +1656,39 @@ export default function LabResultsManagement() {
             </TableBody>
           </Table>
 
-          {/* صدور فاکتور و ثبت نهایی */}
+          {/* دکمه یکپارچه Master Action: ثبت نهایی، صدور خودکار فاکتور و پرینت */}
           <div className="mt-6 p-4 rounded-lg bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              {canCreateInvoice ? (
-                <Button
-                  variant={invoiceCreated ? "secondary" : "default"}
-                  onClick={() => {
-                    if (temporaryQueue.length === 0) {
-                      toast.warning(
-                        "ابتدا باید حداقل یک مورد در لیست موقت وجود داشته باشد",
-                      );
-                      return;
-                    }
-                    setIsInvoiceModalOpen(true);
-                  }}
-                  className="gap-2"
-                >
-                  <Receipt className="w-4 h-4" />
-                  {invoiceCreated ? "فاکتور صادر شد ✓" : "ساخت فاکتور"}
-                </Button>
-              ) : (
-                <Button
-                  variant="outline"
-                  disabled
-                  title="دسترسی صدور فاکتور فقط مخصوص منشی سطح یک و مدیر سیستم است"
-                  className="gap-2 text-slate-400 border-slate-200 cursor-not-allowed bg-slate-100/70"
-                >
-                  <Lock className="w-4 h-4 text-slate-400" />
-                  <span>ساخت فاکتور (نیازمند سطح 1)</span>
-                </Button>
-              )}
-
-              {invoiceCreated && (
-                <span className="text-xs text-emerald-600 font-medium">
-                  آماده ثبت نهایی
-                </span>
-              )}
+            <div className="text-xs text-slate-500">
+              با کلیک روی دکمه ثبت نهایی، صورتحساب به صورت خودکار صادر شده و
+              دستور چاپ پرونده ممهور ارسال خواهد شد.
             </div>
 
             <Button
               variant="default"
-              onClick={handleFinalSubmit}
-              disabled={isSubmitting}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+              size="lg"
+              onClick={handleMasterSubmitAndPrint}
+              disabled={
+                isSubmitting ||
+                isVisitLocked ||
+                isCheckingVisitStatus ||
+                temporaryQueue.length === 0
+              }
+              className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2 shadow-sm font-semibold disabled:bg-slate-400"
             >
               {isSubmitting ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  در حال ثبت و آپلود...
+                  در حال ثبت، صدور فاکتور و ارسال به پرینتر...
+                </>
+              ) : isVisitLocked ? (
+                <>
+                  <Lock className="w-4 h-4" />
+                  پرونده قفل است
                 </>
               ) : (
                 <>
-                  <CheckCircle2 className="w-4 h-4" />
-                  ثبت نهایی
+                  <CheckCircle2 className="w-5 h-5" />
+                  ثبت نهایی، صدور صورتحساب و چاپ جوابدهی
                 </>
               )}
             </Button>
@@ -1302,7 +1717,7 @@ export default function LabResultsManagement() {
                 <TableHead className="text-center w-[15%]">
                   وضعیت فاکتور
                 </TableHead>
-                <TableHead className="text-center w-[15%]">عملیات</TableHead>
+                <TableHead className="text-center w-[15%]">چاپ مجدد</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1333,7 +1748,7 @@ export default function LabResultsManagement() {
                     </TableCell>
                     <TableCell className="text-center">
                       <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 border-0">
-                        {record.hasInvoice ? "فاکتور دارد" : "بدون فاکتور"}
+                        {record.hasInvoice ? "صادر شد ✓" : "بدون فاکتور"}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-center">
@@ -1352,32 +1767,8 @@ export default function LabResultsManagement() {
               )}
             </TableBody>
           </Table>
-
-          {/* دکمه کلی صدور و چاپ آخرین جوابدهی */}
-          {finalRecords.length > 0 && (
-            <div className="mt-6 flex justify-end">
-              <Button
-                size="lg"
-                onClick={handleExportResult}
-                className="gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold"
-              >
-                <Printer className="w-5 h-5" />
-                صدور و چاپ جوابدهی
-              </Button>
-            </div>
-          )}
         </div>
       </div>
-
-      {/* فقط اگر دسترسی وجود دارد مودال اجازه رندر و باز شدن دارد */}
-      {canCreateInvoice && (
-        <InvoiceModal
-          isOpen={isInvoiceModalOpen}
-          onClose={() => setIsInvoiceModalOpen(false)}
-          queueItems={temporaryQueue}
-          onConfirmInvoice={handleConfirmInvoice}
-        />
-      )}
     </div>
   );
 }
