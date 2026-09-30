@@ -13,13 +13,15 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8000",
+        target: "http://188.121.114.194:8000/api",
+        //target: "http://127.0.0.1:8000",
         changeOrigin: true,
         secure: false,
       },
       // اضافه کردن پروکسی برای فایل‌های استوریج لاراول (مهر پزشک و مستندات)
       "/storage": {
-        target: "http://127.0.0.1:8000",
+        target: "http://188.121.114.194:8000/api",
+        //target: "http://127.0.0.1:8000",
         changeOrigin: true,
         secure: false,
       },
