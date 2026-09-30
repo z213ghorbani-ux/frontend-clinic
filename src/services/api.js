@@ -1,8 +1,13 @@
 import axios from "axios";
 
-// این مقدار را به آدرس کامل سرور بک‌‌اند خود تغییر بده
+// برای استقرار روی سرور Coolify:
+const BACKEND_URL = "http://188.121.114.194:8000/api";
+
+// برای توسعه لوکال در سیستم خودت (در صورت نیاز آن‌کامنت کن):
+// const BACKEND_URL = "http://localhost:8000/api";
+
 const api = axios.create({
-  baseURL: "http://localhost:8000/api",
+  baseURL: BACKEND_URL,
   headers: {
     Accept: "application/json",
   },
@@ -10,7 +15,6 @@ const api = axios.create({
 
 api.interceptors.request.use(
   (config) => {
-    // اصلاح کوچکی هم در اینجا انجام دادم که احتمالاً کپی-پیست اشتباه بوده
     const token = localStorage.getItem("token");
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
