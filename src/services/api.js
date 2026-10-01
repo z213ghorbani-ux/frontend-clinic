@@ -4,7 +4,7 @@ import axios from "axios";
 const BACKEND_URL = "http://188.121.114.194:8000/api";
 
 // برای توسعه لوکال در سیستم خودت (در صورت نیاز آن‌کامنت کن):
-// const BACKEND_URL = "http://localhost:8000/api";
+ //const BACKEND_URL = "http://localhost:8000/api";
 
 const api = axios.create({
   baseURL: BACKEND_URL,
