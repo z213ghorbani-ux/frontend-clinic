@@ -1,7 +1,7 @@
 import axios from "axios";
 
 // اولویت با متغیر محیطی است، اگر نبود به لوکال فال‌بک می‌زند
-const BACKEND_URL = import.meta.env.VITE_API_URL || "http://localhost:8000/api";
+const BACKEND_URL = import.meta.env.VITE_API_URL || "http://localhost:8080/api";
 
 const api = axios.create({
   baseURL: BACKEND_URL,
