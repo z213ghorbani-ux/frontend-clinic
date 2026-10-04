@@ -92,15 +92,55 @@ const extractUserName = (obj) => {
 const buildStampUrl = (stampPath) => {
   if (!stampPath) return null;
 
-  if (typeof stampPath === "string" && stampPath.startsWith("http")) {
-    if (stampPath.includes("localhost:8000")) {
-      return stampPath.replace(/http:\/\/localhost:8000/g, "");
-    }
-    return stampPath;
+  let path = String(stampPath);
+
+  // حذف لوکال‌هاست اگر در دیتابیس هاردکد ذخیره شده باشد
+  if (path.includes("localhost:8000")) {
+    path = path.replace(/https?:\/\/localhost:8000\/?/g, "");
   }
 
-  const cleanPath = String(stampPath).replace(/^\/?storage\//, "");
-  return `/storage/${cleanPath}`;
+  // اگر هنوز یک آدرس کامل خارجی یا روی دامین اصلی است
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+
+  const cleanPath = path.replace(/^\/?storage\//, "").replace(/^\//, "");
+
+  // ساخت آدرس کامل برای لود امن از استوریج بک‌اند
+  const apiBase = import.meta.env?.VITE_API_BASE_URL
+    ? import.meta.env.VITE_API_BASE_URL.replace(/\/api\/?$/, "")
+    : typeof window !== "undefined"
+      ? window.location.origin
+      : "";
+
+  return `${apiBase}/storage/${cleanPath}`;
+};
+
+// الصاق ایمن تصویر مهر/امضا؛ نوع فایل از روی magic bytes تشخیص داده می‌شود
+const embedImageSafely = async (pdfDoc, imageBytes) => {
+  try {
+    const bytes = new Uint8Array(imageBytes);
+
+    const isPng =
+      bytes.length >= 8 &&
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47;
+
+    const isJpg = bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8;
+
+    if (isPng) return await pdfDoc.embedPng(bytes);
+    if (isJpg) return await pdfDoc.embedJpg(bytes);
+
+    console.warn(
+      "[PDF] فرمت تصویر مهر پشتیبانی نمی‌شود (فقط PNG و JPG). احتمالاً آدرس مهر تصویر برنمی‌گرداند.",
+    );
+    return null;
+  } catch (err) {
+    console.warn("[PDF] امکان الصاق تصویر مهر وجود ندارد:", err);
+    return null;
+  }
 };
 
 // ذخیره یک آیتم صف (به‌همراه فایل‌ها و لاگ ثبت‌کننده) روی سرور
@@ -251,17 +291,8 @@ const sealPdfFileWithDoctorStamp = async (pdfFile, doctor, options = {}) => {
     const existingPdfBytes = await pdfFile.arrayBuffer();
     const pdfDoc = await PDFDocument.load(existingPdfBytes);
 
-    let stampImage = null;
-    try {
-      stampImage = await pdfDoc.embedPng(stampImageBytes);
-    } catch (e) {
-      try {
-        stampImage = await pdfDoc.embedJpg(stampImageBytes);
-      } catch (embedErr) {
-        console.error("فرمت مهر پشتیبانی نشد:", embedErr);
-        return pdfFile;
-      }
-    }
+    const stampImage = await embedImageSafely(pdfDoc, stampImageBytes);
+    if (!stampImage) return pdfFile;
 
     const pages = pdfDoc.getPages();
     if (!pages || pages.length === 0) return pdfFile;

@@ -16,14 +16,27 @@ import { toast } from "sonner";
 
 const PAGE_SIZE = 5;
 
-const STORAGE_BASE_URL = "http://localhost:8000";
+// دریافت داینامیک آدرس سرور جهت لود تصاویر استوریج
+const getBaseStorageUrl = () => {
+  const envApiUrl = import.meta.env?.VITE_API_BASE_URL;
+  if (envApiUrl) {
+    return envApiUrl.replace(/\/api\/?$/, "");
+  }
+  const apiAxiosBase = api.defaults?.baseURL;
+  if (apiAxiosBase && apiAxiosBase.startsWith("http")) {
+    return apiAxiosBase.replace(/\/api\/?$/, "");
+  }
+  return window.location.origin;
+};
+
+const STORAGE_BASE_URL = getBaseStorageUrl();
 
 const getImageUrl = (path) => {
   if (!path) return null;
 
   let value = String(path).trim().replaceAll("\\", "/");
 
-  // اگر URL کامل از بک‌اند برگشته باشد، همان را نگه می‌داریم.
+  // اگر URL کامل برگشته باشد
   if (value.startsWith("http://") || value.startsWith("https://")) {
     return value.replaceAll("/storage//", "/storage/");
   }
@@ -45,7 +58,9 @@ const normalizeDoctor = (doctor) => ({
   id: doctor.id,
   fullName: doctor.name || "",
   specialty: doctor.specialty || "",
-  signatureData: getImageUrl(doctor.stamp_url || doctor.stamp_path),
+  signatureData: getImageUrl(
+    doctor.stamp_url || doctor.stamp_path || doctor.signature,
+  ),
   createdAt: doctor.created_at
     ? new Date(doctor.created_at).toLocaleDateString("fa-IR")
     : "-",
@@ -76,7 +91,7 @@ export default function DoctorsManagement() {
       const res = response.data;
 
       const rawList = Array.isArray(res?.data?.data)
-        ? res.data.data // ← حالت paginate واقعی بک‌اند شما
+        ? res.data.data
         : Array.isArray(res?.data)
           ? res.data
           : Array.isArray(res)
@@ -117,9 +132,12 @@ export default function DoctorsManagement() {
     const file = e.target.files[0];
     if (!file) return;
 
-    const allowedTypes = ["image/png", "image/jpeg", "image/jpg"];
+    const allowedTypes = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
     if (!allowedTypes.includes(file.type)) {
-      setErrors((prev) => ({ ...prev, signature: "فرمت مجاز: PNG یا JPG" }));
+      setErrors((prev) => ({
+        ...prev,
+        signature: "فرمت مجاز: PNG یا JPG یا WEBP",
+      }));
       e.target.value = "";
       return;
     }
@@ -165,9 +183,9 @@ export default function DoctorsManagement() {
         "medical_council_code",
         formData.medicalCouncilCode.trim(),
       );
-      payload.append("stamp", formData.signature); // به جای "signature"
+      payload.append("stamp", formData.signature);
 
-      await api.post("/doctors", payload); // بدون هدر دستی Content-Type
+      await api.post("/doctors", payload);
 
       toast.success("پزشک با موفقیت ثبت شد");
       setFormData({
@@ -212,7 +230,7 @@ export default function DoctorsManagement() {
       dir="rtl"
     >
       <div className="max-w-6xl mx-auto space-y-6">
-        {/* نوار هدر مینیمال */}
+        {/* نوار هدر */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-2 border-b border-slate-200/80">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20">
@@ -237,9 +255,8 @@ export default function DoctorsManagement() {
           </button>
         </div>
 
-        {/* بخش اصلی در دو ستون */}
+        {/* بخش فرم و لیست */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* فرم ثبت پزشک */}
           <div className="lg:col-span-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm p-5">
             <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
               <span className="text-sm font-bold text-slate-800 flex items-center gap-2">
@@ -299,6 +316,7 @@ export default function DoctorsManagement() {
                   </p>
                 )}
               </div>
+
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1.5">
                   کد نظام پزشکی <span className="text-red-500">*</span>
@@ -322,7 +340,7 @@ export default function DoctorsManagement() {
                   </p>
                 )}
               </div>
-              {/* آپلودر سفارشی به جای فایل اینپوت زشت پیش‌فرض */}
+
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1.5">
                   مهر و امضا <span className="text-red-500">*</span>
@@ -331,7 +349,7 @@ export default function DoctorsManagement() {
                   ref={fileInputRef}
                   type="file"
                   id="doctor-signature"
-                  accept="image/png, image/jpeg, image/jpg"
+                  accept="image/png, image/jpeg, image/jpg, image/webp"
                   onChange={handleFileChange}
                   disabled={isSubmitting}
                   className="hidden"
@@ -390,7 +408,6 @@ export default function DoctorsManagement() {
             </form>
           </div>
 
-          {/* جدول لیست پزشکان */}
           <div className="lg:col-span-8 bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
             <div className="flex items-center justify-between p-4 px-5 border-b border-slate-100 bg-slate-50/50">
               <div className="flex items-center gap-2">
