@@ -286,7 +286,18 @@ const sealPdfFileWithDoctorStamp = async (pdfFile, doctor, options = {}) => {
       console.warn("خطا در دریافت مهر:", stampRes.status, stampUrl);
       return pdfFile;
     }
+
+    // 🔍 دیباگ: نوع واقعی پاسخ و URL را چاپ کن
+    console.log("🔍 Stamp URL:", stampUrl);
+    console.log("🔍 Content-Type:", stampRes.headers.get("content-type"));
+
     const stampImageBytes = await stampRes.arrayBuffer();
+    console.log(
+      "🔍 چند بایت اول:",
+      Array.from(new Uint8Array(stampImageBytes).slice(0, 12))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join(" "),
+    );
 
     const existingPdfBytes = await pdfFile.arrayBuffer();
     const pdfDoc = await PDFDocument.load(existingPdfBytes);
