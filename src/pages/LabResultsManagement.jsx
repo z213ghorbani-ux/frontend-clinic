@@ -88,43 +88,6 @@ const extractUserName = (obj) => {
   );
 };
 
-// تابع کمکی برای ساخت آدرس تصویر مهر و امضا
-const buildStampUrl = (stampPath) => {
-  if (!stampPath) return null;
-
-  let path = String(stampPath);
-
-  // حذف لوکال‌هاست اگر در دیتابیس هاردکد ذخیره شده باشد
-  if (path.includes("localhost:8000")) {
-    path = path.replace(/https?:\/\/localhost:8000\/?/g, "");
-  }
-
-  // اگر آدرس کامل است ولی دامین فرانت (5173) در آن است، هاست را با بک‌اند عوض کن
-  if (path.startsWith("http://") || path.startsWith("https://")) {
-    try {
-      const u = new URL(path);
-      const apiBase = import.meta.env?.VITE_API_BASE_URL
-        ? import.meta.env.VITE_API_BASE_URL.replace(/\/api\/?$/, "")
-        : null;
-      if (apiBase && u.origin !== new URL(apiBase).origin) {
-        return `${apiBase}${u.pathname}`;
-      }
-    } catch {
-      /* ignore */
-    }
-    return path;
-  }
-
-  const cleanPath = path.replace(/^\/?storage\//, "").replace(/^\//, "");
-
-  // آدرس بک‌اند: از VITE_API_BASE_URL، در غیر این صورت پورت 9090
-  const apiBase = import.meta.env?.VITE_API_BASE_URL
-    ? import.meta.env.VITE_API_BASE_URL.replace(/\/api\/?$/, "")
-    : `${window.location.protocol}//${window.location.hostname}:9090`;
-
-  return `${apiBase}/storage/${cleanPath}`;
-};
-
 // الصاق ایمن تصویر مهر/امضا؛ نوع فایل از روی magic bytes تشخیص داده می‌شود
 const embedImageSafely = async (pdfDoc, imageBytes) => {
   try {
@@ -287,20 +250,16 @@ const sealPdfFileWithDoctorStamp = async (pdfFile, doctor, options = {}) => {
       return pdfFile;
     }
 
-    const stampUrl = buildStampUrl(stampPath);
-    if (!stampUrl) return pdfFile;
+    if (!doctor?.id) return pdfFile;
 
-    const stampRes = await fetch(stampUrl);
-    if (!stampRes.ok) {
-      console.warn("خطا در دریافت مهر:", stampRes.status, stampUrl);
-      return pdfFile;
-    }
+    // دریافت مهر از طریق API احرازهویت‌شده (بدون وابستگی به سیم‌لینک storage)
+    const stampRes = await api.get(`/doctors/${doctor.id}/stamp`, {
+      responseType: "arraybuffer",
+    });
+    const stampImageBytes = stampRes.data;
 
-    // 🔍 دیباگ: نوع واقعی پاسخ و URL را چاپ کن
-    console.log("🔍 Stamp URL:", stampUrl);
-    console.log("🔍 Content-Type:", stampRes.headers.get("content-type"));
-
-    const stampImageBytes = await stampRes.arrayBuffer();
+    // 🔍 دیباگ: نوع واقعی پاسخ را چاپ کن
+    console.log("🔍 Content-Type:", stampRes.headers?.["content-type"]);
     console.log(
       "🔍 چند بایت اول:",
       Array.from(new Uint8Array(stampImageBytes).slice(0, 12))
