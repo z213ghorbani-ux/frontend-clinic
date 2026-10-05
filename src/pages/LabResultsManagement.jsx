@@ -99,19 +99,28 @@ const buildStampUrl = (stampPath) => {
     path = path.replace(/https?:\/\/localhost:8000\/?/g, "");
   }
 
-  // اگر هنوز یک آدرس کامل خارجی یا روی دامین اصلی است
+  // اگر آدرس کامل است ولی دامین فرانت (5173) در آن است، هاست را با بک‌اند عوض کن
   if (path.startsWith("http://") || path.startsWith("https://")) {
+    try {
+      const u = new URL(path);
+      const apiBase = import.meta.env?.VITE_API_BASE_URL
+        ? import.meta.env.VITE_API_BASE_URL.replace(/\/api\/?$/, "")
+        : null;
+      if (apiBase && u.origin !== new URL(apiBase).origin) {
+        return `${apiBase}${u.pathname}`;
+      }
+    } catch {
+      /* ignore */
+    }
     return path;
   }
 
   const cleanPath = path.replace(/^\/?storage\//, "").replace(/^\//, "");
 
-  // ساخت آدرس کامل برای لود امن از استوریج بک‌اند
+  // آدرس بک‌اند: از VITE_API_BASE_URL، در غیر این صورت پورت 9090
   const apiBase = import.meta.env?.VITE_API_BASE_URL
     ? import.meta.env.VITE_API_BASE_URL.replace(/\/api\/?$/, "")
-    : typeof window !== "undefined"
-      ? window.location.origin
-      : "";
+    : `${window.location.protocol}//${window.location.hostname}:9090`;
 
   return `${apiBase}/storage/${cleanPath}`;
 };
