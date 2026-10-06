@@ -5,7 +5,7 @@ import React, {
   useMemo,
   useRef,
 } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import * as echarts from "echarts";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -55,6 +55,7 @@ import {
   CreditCard,
 } from "lucide-react";
 
+import api from "@/services/api";
 import { PersianDatePicker } from "@/components/ui/persian-datepicker";
 import reportService from "@/services/reportService";
 import { SERVICE_TYPES, getServiceCode } from "@/constants/services";
@@ -867,39 +868,44 @@ export default function ReportsManagement() {
   };
 
   // دانلود و پرینت مستقیم فاکتور نهایی همراه با کد خدمت و مهر و امضای همه پزشکان دخیل
-  const handleDownloadInvoice = (row, autoPrint = false) => {
-    // ۱. بررسی فایل پیوست تولید شده در پرونده
-    const attachments = Array.isArray(row?.attachments) ? row.attachments : [];
-    const invoicePdfAttachment = attachments.find(
-      (a) =>
-        (a?.original_name && a.original_name.includes("صورتحساب")) ||
-        (a?.path && a.path.toLowerCase().endsWith(".pdf")),
-    );
+  // دریافت PDF رسمی فاکتور با توکن احراز هویت و دانلود/پرینت آن
+  const handleDownloadInvoice = async (row, autoPrint = false) => {
+    const invoiceId = row?.invoice?.id;
 
-    // ۲. استخراج شناسه پرونده
-    const recordId = row?.id || row?.invoice?.id;
-
-    if (!recordId) {
-      alert("شناسه پرونده جهت دریافت فاکتور یافت نشد.");
+    if (!invoiceId) {
+      alert("شناسه فاکتور معتبر یافت نشد.");
       return;
     }
 
-    // ۳. تعیین آدرس اندپوینت نهایی PDF فاکتور
-    // در صورتی که فایل از قبل ایجاد شده باشد یا تولید مستقیم روی سرور مدنظر باشد
-    let pdfUrl = `${API_BASE_URL}/api/portal/${recordId}/invoice-pdf`;
+    try {
+      const res = await api.get(`/invoices/${invoiceId}/official-pdf`, {
+        responseType: "blob",
+      });
 
-    if (autoPrint) {
-      // باز کردن مستقیم فاکتور رسمی در تب جدید جهت مشاهده و پرینت
-      window.open(pdfUrl, "_blank", "noopener,noreferrer");
-    } else {
-      // دانلود مستقیم فایل فاکتور PDF
-      const link = document.createElement("a");
-      link.href = pdfUrl;
-      link.setAttribute("download", `invoice-${recordId}.pdf`);
-      link.target = "_blank";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const blob = new Blob([res.data], { type: "application/pdf" });
+      const blobUrl = URL.createObjectURL(blob);
+
+      if (autoPrint) {
+        window.open(blobUrl, "_blank");
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+      } else {
+        const link = document.createElement("a");
+        link.href = blobUrl;
+        link.download = `invoice-${invoiceId}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(blobUrl);
+      }
+    } catch (error) {
+      const status = error.response?.status;
+      if (status === 404) {
+        alert("فاکتور یافت نشد.");
+      } else if (status === 401 || status === 403) {
+        alert("دسترسی به این فاکتور مجاز نیست.");
+      } else {
+        alert("خطا در دریافت فایل فاکتور.");
+      }
     }
   };
 
