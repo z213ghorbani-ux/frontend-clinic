@@ -1,40 +1,54 @@
-  import React, { useState } from "react";
-  import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-  import Login from "./pages/Login";
-  import Dashboard from "./pages/Dashboard";
-  import ProtectedRoute from "./components/ProtectedRoute";
-  import DoctorsManagement from "./pages/DoctorsManagement";
-  import PatientsManagement from "./pages/PatientsManagement";
-  import SecretariesManagement from "@/pages/SecretariesManagement";
-  import LabResultsManagement from "./pages/LabResultsManagement";
-  import ArchivesManagement from "./pages/ArchivesManagement";
-  import ReportsManagement from "./pages/ReportsManagement";
-  import PatientPortal from "./pages/PatientPortal";
-  import ServicesManagement from "@/pages/ServicesManagement";
+import React, { useState, Suspense, lazy } from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import ProtectedRoute from "./components/ProtectedRoute";
 
-  export default function App() {
-    const [isAuthenticated, setIsAuthenticated] = useState(
-      Boolean(localStorage.getItem("token")),
-    );
+// ۱. لود تنبل (Lazy Loading) تمام صفحات برای کاهش شدید حجم باندل اولیه
+const Login = lazy(() => import("./pages/Login"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const DoctorsManagement = lazy(() => import("./pages/DoctorsManagement"));
+const PatientsManagement = lazy(() => import("./pages/PatientsManagement"));
+const SecretariesManagement = lazy(
+  () => import("@/pages/SecretariesManagement"),
+);
+const LabResultsManagement = lazy(() => import("./pages/LabResultsManagement"));
+const ArchivesManagement = lazy(() => import("./pages/ArchivesManagement"));
+const ReportsManagement = lazy(() => import("./pages/ReportsManagement"));
+const PatientPortal = lazy(() => import("./pages/PatientPortal"));
+const ServicesManagement = lazy(() => import("@/pages/ServicesManagement"));
 
-    const handleLoginSuccess = () => {
-      setIsAuthenticated(true);
-    };
+// اسپینر یا لودینگ ساده و سبک هنگام تغییر صفحات
+function PageLoader() {
+  return (
+    <div className="flex h-screen w-full items-center justify-center bg-gray-50 dark:bg-gray-900">
+      <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+    </div>
+  );
+}
 
-    const handleLogout = () => {
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-      setIsAuthenticated(false);
-    };
+export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(
+    Boolean(localStorage.getItem("token")),
+  );
 
-    return (
-      <BrowserRouter>
+  const handleLoginSuccess = () => {
+    setIsAuthenticated(true);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    setIsAuthenticated(false);
+  };
+
+  return (
+    <BrowserRouter>
+      {/* تمام روت‌ها داخل Suspense قرار می‌گیرند تا باندل فقط در صورت نیاز لود شود */}
+      <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route
             path="/login"
             element={<Login onLoginSuccess={handleLoginSuccess} />}
           />
-          
 
           {/* داشبورد: در دسترس همه نقش‌های لاگین شده */}
           <Route
@@ -108,7 +122,7 @@
             }
           />
 
-          {/* جوابدهی: همه می‌بینند (در سطح ۲ دکمه ثبت نهایی غیرفعال می‌شود) */}
+          {/* جوابدهی: همه می‌بینند */}
           <Route
             path="/results"
             element={
@@ -124,6 +138,7 @@
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
-      </BrowserRouter>
-    );
-  }
+      </Suspense>
+    </BrowserRouter>
+  );
+}
