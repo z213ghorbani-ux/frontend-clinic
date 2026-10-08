@@ -17,6 +17,19 @@ import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import api from "@/services/api";
 
+// مقادیر پیش‌فرض فرم
+const emptyForm = {
+  name: "",
+  code: "",
+  price: "",
+  is_visit: false,
+  parent_id: null,
+  has_signature: false,
+  signature_x: "",
+  signature_y: "",
+  signature_page: "last",
+};
+
 export default function ServicesManagement() {
   const navigate = useNavigate();
 
@@ -30,13 +43,7 @@ export default function ServicesManagement() {
   const [selectedParent, setSelectedParent] = useState(null);
   const [editingItem, setEditingItem] = useState(null);
 
-  const [formData, setFormData] = useState({
-    name: "",
-    code: "",
-    price: "",
-    is_visit: false,
-    parent_id: null,
-  });
+  const [formData, setFormData] = useState({ ...emptyForm });
 
   // دریافت ساختار درختی خدمات از بک‌اند
   const fetchServices = useCallback(async () => {
@@ -62,13 +69,7 @@ export default function ServicesManagement() {
   const handleOpenParentForm = () => {
     setEditingItem(null);
     setSelectedParent(null);
-    setFormData({
-      name: "",
-      code: "",
-      price: "0",
-      is_visit: false,
-      parent_id: null,
-    });
+    setFormData({ ...emptyForm, price: "0" });
     setIsFormOpen(true);
     setErrorMsg("");
     setSuccessMsg("");
@@ -78,13 +79,7 @@ export default function ServicesManagement() {
   const handleOpenChildForm = (parent) => {
     setEditingItem(null);
     setSelectedParent(parent);
-    setFormData({
-      name: "",
-      code: "",
-      price: "",
-      is_visit: false,
-      parent_id: parent.id,
-    });
+    setFormData({ ...emptyForm, parent_id: parent.id });
     setIsFormOpen(true);
     setErrorMsg("");
     setSuccessMsg("");
@@ -106,6 +101,16 @@ export default function ServicesManagement() {
           : "0",
       is_visit: Boolean(item.is_visit),
       parent_id: item.parent_id || null,
+      has_signature: Boolean(item.has_signature),
+      signature_x:
+        item.signature_x !== undefined && item.signature_x !== null
+          ? String(item.signature_x)
+          : "",
+      signature_y:
+        item.signature_y !== undefined && item.signature_y !== null
+          ? String(item.signature_y)
+          : "",
+      signature_page: item.signature_page || "last",
     });
     setIsFormOpen(true);
     setErrorMsg("");
@@ -117,13 +122,7 @@ export default function ServicesManagement() {
     setIsFormOpen(false);
     setEditingItem(null);
     setSelectedParent(null);
-    setFormData({
-      name: "",
-      code: "",
-      price: "",
-      is_visit: false,
-      parent_id: null,
-    });
+    setFormData({ ...emptyForm });
   };
 
   // ارسال فرم (ثبت یا ویرایش) با اعتبارسنجی دقیق خطای ولیدیشن ۴۲۲
@@ -145,6 +144,18 @@ export default function ServicesManagement() {
         price: parseInt(formData.price || 0, 10),
         is_visit: Boolean(formData.is_visit),
         parent_id: formData.parent_id || null,
+        has_signature: Boolean(formData.has_signature),
+        signature_x:
+          formData.has_signature && formData.signature_x !== ""
+            ? Number(formData.signature_x)
+            : null,
+        signature_y:
+          formData.has_signature && formData.signature_y !== ""
+            ? Number(formData.signature_y)
+            : null,
+        signature_page: formData.has_signature
+          ? formData.signature_page || "last"
+          : null,
       };
 
       if (editingItem) {
@@ -320,6 +331,97 @@ export default function ServicesManagement() {
                     <Stethoscope className="h-4 w-4 text-emerald-600" />
                     خدمت از نوع ویزیت است
                   </label>
+                </div>
+
+                {/* بخش تنظیمات مهر و امضا روی فایل پیوست */}
+                <div className="p-4 mt-4 bg-slate-50 border border-slate-200 rounded-xl space-y-4 sm:col-span-2 md:col-span-4">
+                  <div className="flex items-center justify-between">
+                    <label
+                      className="text-sm font-bold text-slate-700 select-none cursor-pointer"
+                      htmlFor="has_signature"
+                    >
+                      درج خودکار مهر و امضا روی فایل پیوست این خدمت
+                    </label>
+                    <input
+                      type="checkbox"
+                      id="has_signature"
+                      name="has_signature"
+                      checked={formData.has_signature || false}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          has_signature: e.target.checked,
+                        })
+                      }
+                      disabled={isSubmitting}
+                      className="w-5 h-5 text-emerald-600 rounded focus:ring-emerald-500 cursor-pointer"
+                    />
+                  </div>
+
+                  {formData.has_signature && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                          موقعیت افقی X (میلی‌متر / پیکسل)
+                        </label>
+                        <input
+                          type="number"
+                          name="signature_x"
+                          value={formData.signature_x || ""}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              signature_x: e.target.value,
+                            })
+                          }
+                          placeholder="مثال: 140"
+                          disabled={isSubmitting}
+                          className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                          موقعیت عمودی Y (میلی‌متر / پیکسل)
+                        </label>
+                        <input
+                          type="number"
+                          name="signature_y"
+                          value={formData.signature_y || ""}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              signature_y: e.target.value,
+                            })
+                          }
+                          placeholder="مثال: 220"
+                          disabled={isSubmitting}
+                          className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                          صفحه اعمال مهر
+                        </label>
+                        <select
+                          name="signature_page"
+                          value={formData.signature_page || "last"}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              signature_page: e.target.value,
+                            })
+                          }
+                          disabled={isSubmitting}
+                          className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        >
+                          <option value="last">صفحه آخر (پیش‌فرض)</option>
+                          <option value="first">صفحه اول</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-end gap-2 md:col-span-4 pt-2 border-t border-indigo-100">
