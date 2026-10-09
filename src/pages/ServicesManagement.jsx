@@ -133,6 +133,23 @@ export default function ServicesManagement() {
       return;
     }
 
+    // اعتبارسنجی سمت کلاینت برای مختصات مهر (A4 = 210×297 میلی‌متر)
+    if (formData.has_signature) {
+      const sx =
+        formData.signature_x === "" ? null : Number(formData.signature_x);
+      const sy =
+        formData.signature_y === "" ? null : Number(formData.signature_y);
+
+      if (sx !== null && (Number.isNaN(sx) || sx < 0 || sx > 210)) {
+        setErrorMsg("موقعیت افقی مهر باید بین ۰ تا ۲۱۰ میلی‌متر باشد.");
+        return;
+      }
+      if (sy !== null && (Number.isNaN(sy) || sy < 0 || sy > 297)) {
+        setErrorMsg("موقعیت عمودی مهر باید بین ۰ تا ۲۹۷ میلی‌متر باشد.");
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     setErrorMsg("");
     setSuccessMsg("");
@@ -359,68 +376,84 @@ export default function ServicesManagement() {
                   </div>
 
                   {formData.has_signature && (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200">
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">
-                          موقعیت افقی X (میلی‌متر / پیکسل)
-                        </label>
-                        <input
-                          type="number"
-                          name="signature_x"
-                          value={formData.signature_x || ""}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              signature_x: e.target.value,
-                            })
-                          }
-                          placeholder="مثال: 140"
-                          disabled={isSubmitting}
-                          className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-600 mb-1">
+                            موقعیت افقی X (میلی‌متر از لبه چپ)
+                          </label>
+                          <input
+                            type="number"
+                            name="signature_x"
+                            min="0"
+                            max="210"
+                            step="any"
+                            value={formData.signature_x || ""}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                signature_x: e.target.value,
+                              })
+                            }
+                            placeholder="مثال: 18"
+                            disabled={isSubmitting}
+                            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-600 mb-1">
+                            موقعیت عمودی Y (میلی‌متر از لبه بالا)
+                          </label>
+                          <input
+                            type="number"
+                            name="signature_y"
+                            min="0"
+                            max="297"
+                            step="any"
+                            value={formData.signature_y || ""}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                signature_y: e.target.value,
+                              })
+                            }
+                            placeholder="مثال: 244"
+                            disabled={isSubmitting}
+                            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-600 mb-1">
+                            صفحه اعمال مهر
+                          </label>
+                          <select
+                            name="signature_page"
+                            value={formData.signature_page || "last"}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                signature_page: e.target.value,
+                              })
+                            }
+                            disabled={isSubmitting}
+                            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          >
+                            <option value="last">صفحه آخر (پیش‌فرض)</option>
+                            <option value="first">صفحه اول</option>
+                          </select>
+                        </div>
                       </div>
 
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">
-                          موقعیت عمودی Y (میلی‌متر / پیکسل)
-                        </label>
-                        <input
-                          type="number"
-                          name="signature_y"
-                          value={formData.signature_y || ""}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              signature_y: e.target.value,
-                            })
-                          }
-                          placeholder="مثال: 220"
-                          disabled={isSubmitting}
-                          className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">
-                          صفحه اعمال مهر
-                        </label>
-                        <select
-                          name="signature_page"
-                          value={formData.signature_page || "last"}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              signature_page: e.target.value,
-                            })
-                          }
-                          disabled={isSubmitting}
-                          className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        >
-                          <option value="last">صفحه آخر (پیش‌فرض)</option>
-                          <option value="first">صفحه اول</option>
-                        </select>
-                      </div>
-                    </div>
+                      <p className="text-[11px] text-slate-500">
+                        مبدأ مختصات گوشه بالا-چپ صفحه A4 (۲۱۰×۲۹۷ میلی‌متر) است.
+                        برای قرار گرفتن مهر پایین-چپ صفحه، مقادیر تقریبی X=18 و
+                        Y=244 را امتحان کنید. اگر مختصات خالی بماند، مهر در
+                        پایین-چپ صفحه درج می‌شود. تغییرات فقط روی فایل‌های جدید
+                        اعمال می‌شود.
+                      </p>
+                    </>
                   )}
                 </div>
 
@@ -497,6 +530,11 @@ export default function ServicesManagement() {
                             {cat.code && (
                               <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-600">
                                 {cat.code}
+                              </span>
+                            )}
+                            {cat.has_signature && (
+                              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 border border-amber-200">
+                                مهر خودکار
                               </span>
                             )}
                           </div>

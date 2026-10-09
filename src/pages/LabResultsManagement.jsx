@@ -9,7 +9,6 @@ import {
   Search,
   Loader2,
   Lock,
-  Unlock,
   Trash2,
   CheckCircle2,
 } from "lucide-react";
@@ -27,6 +26,11 @@ import {
 } from "@/components/ui/table";
 import { PDFDocument } from "pdf-lib";
 import { getServiceCode } from "@/constants/services";
+
+// تبدیل میلی‌متر به point (واحد pdf-lib)
+const MM_TO_PT = 72 / 25.4;
+// عرض پیش‌فرض مهر هنگام استفاده از مختصات خدمت (میلی‌متر)
+const SIGNATURE_STAMP_WIDTH_MM = 50;
 
 // تابع کمکی جامع برای خواندن دقیق اطلاعات کاربر لاگین‌شده از LocalStorage
 const getCurrentUser = () => {
@@ -221,14 +225,24 @@ const resolveServiceFile = async (draftId, index, s) => {
   });
 };
 
-// تابع الصاق مهر پزشک روی فایل PDF
+/**
+ * الصاق مهر پزشک روی فایل PDF
+ *
+ * options.signature (اختیاری) - تنظیمات مهر از تعریف خدمت:
+ *   { x, y, page }
+ *   x و y بر حسب میلی‌متر، مبدأ: گوشه بالا-چپ صفحه
+ *   page: "first" یا "last"
+ *
+ * اگر signature داده نشود یا مختصاتش خالی باشد، مهر با مقادیر پیش‌فرض
+ * (پایین-چپ صفحه آخر، بر حسب point) درج می‌شود.
+ */
 const sealPdfFileWithDoctorStamp = async (pdfFile, doctor, options = {}) => {
   const {
     stampWidth = 130,
     marginX = 50,
     marginY = 50,
     opacity = 0.9,
-    position = "bottom-left",
+    signature = null,
   } = options;
 
   try {
@@ -258,15 +272,6 @@ const sealPdfFileWithDoctorStamp = async (pdfFile, doctor, options = {}) => {
     });
     const stampImageBytes = stampRes.data;
 
-    // 🔍 دیباگ: نوع واقعی پاسخ را چاپ کن
-    console.log("🔍 Content-Type:", stampRes.headers?.["content-type"]);
-    console.log(
-      "🔍 چند بایت اول:",
-      Array.from(new Uint8Array(stampImageBytes).slice(0, 12))
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join(" "),
-    );
-
     const existingPdfBytes = await pdfFile.arrayBuffer();
     const pdfDoc = await PDFDocument.load(existingPdfBytes);
 
@@ -276,31 +281,44 @@ const sealPdfFileWithDoctorStamp = async (pdfFile, doctor, options = {}) => {
     const pages = pdfDoc.getPages();
     if (!pages || pages.length === 0) return pdfFile;
 
-    const lastPage = pages[pages.length - 1];
-    const { width, height } = lastPage.getSize();
+    const hasCustomPosition =
+      signature &&
+      signature.x !== null &&
+      signature.x !== undefined &&
+      signature.y !== null &&
+      signature.y !== undefined &&
+      !Number.isNaN(Number(signature.x)) &&
+      !Number.isNaN(Number(signature.y));
 
-    const computedStampHeight =
-      (stampImage.height / stampImage.width) * stampWidth;
+    // صفحه هدف: اولین یا آخرین صفحه
+    const targetPage =
+      signature?.page === "first" ? pages[0] : pages[pages.length - 1];
+    const { width, height } = targetPage.getSize();
+
+    const drawWidth = hasCustomPosition
+      ? SIGNATURE_STAMP_WIDTH_MM * MM_TO_PT
+      : stampWidth;
+    const drawHeight = (stampImage.height / stampImage.width) * drawWidth;
 
     let x = marginX;
     let y = marginY;
 
-    if (position === "bottom-right") {
-      x = Math.max(0, width - stampWidth - marginX);
-      y = marginY;
-    } else {
-      x = marginX;
-      y = marginY;
+    if (hasCustomPosition) {
+      // X از لبه چپ (میلی‌متر)، Y از لبه بالا (میلی‌متر)
+      // pdf-lib مبدأ را پایین-چپ می‌گیرد، پس Y باید برعکس شود.
+      x = Number(signature.x) * MM_TO_PT;
+      y = height - Number(signature.y) * MM_TO_PT - drawHeight;
     }
 
-    x = Math.min(Math.max(0, x), Math.max(0, width - stampWidth));
-    y = Math.min(Math.max(0, height - computedStampHeight), Math.max(0, y));
+    // جلوگیری از بیرون زدن مهر از صفحه
+    x = Math.min(Math.max(0, x), Math.max(0, width - drawWidth));
+    y = Math.min(Math.max(0, y), Math.max(0, height - drawHeight));
 
-    lastPage.drawImage(stampImage, {
+    targetPage.drawImage(stampImage, {
       x,
       y,
-      width: stampWidth,
-      height: computedStampHeight,
+      width: drawWidth,
+      height: drawHeight,
       opacity,
     });
 
@@ -381,16 +399,18 @@ export default function LabResultsManagement() {
             ),
             type: item.type || item.service_type || "",
             category: item.category || item.service_category || "",
+            // تنظیمات مهر و امضا از تعریف خدمت
+            has_signature: Boolean(item.has_signature),
+            signature_x:
+              item.signature_x !== undefined && item.signature_x !== null
+                ? Number(item.signature_x)
+                : null,
+            signature_y:
+              item.signature_y !== undefined && item.signature_y !== null
+                ? Number(item.signature_y)
+                : null,
+            signature_page: item.signature_page || "last",
           }));
-
-          /*if (!formatted.some((s) => s.id === "other")) {
-            formatted.push({
-              id: "other",
-              title: "سایر خدمات",
-              description: "ثبت دستی",
-              price: 0,
-            });
-          }*/
 
           setServicesList(formatted);
         } else {
@@ -756,6 +776,7 @@ export default function LabResultsManagement() {
       },
     ]);
   };
+
   const handleServiceFileChange = (serviceId, file) => {
     setSelectedServices((prev) =>
       prev.map((service) =>
@@ -763,6 +784,20 @@ export default function LabResultsManagement() {
           ? {
               ...service,
               file: file || null,
+            }
+          : service,
+      ),
+    );
+  };
+
+  // تغییر عنوان دستی برای خدمت «سایر»
+  const handleCustomNameChange = (serviceId, value) => {
+    setSelectedServices((prev) =>
+      prev.map((service) =>
+        String(service.serviceId) === String(serviceId)
+          ? {
+              ...service,
+              customName: value,
             }
           : service,
       ),
@@ -1070,17 +1105,31 @@ export default function LabResultsManagement() {
           const rawFile = await resolveServiceFile(queueItem.draftId, idx, s);
 
           if (rawFile) {
-            const sealedFile = await sealPdfFileWithDoctorStamp(
-              rawFile,
-              queueItem.doctor,
-              {
-                position: "bottom-left",
-                stampWidth: 130,
-                marginX: 50,
-                marginY: 50,
-                opacity: 0.9,
-              },
+            // تنظیمات مهر همین خدمت (از تعریف خدمت در «مدیریت خدمات»)
+            const svc = servicesList.find(
+              (sv) => String(sv.id) === String(s.serviceId),
             );
+
+            let sealedFile = rawFile;
+
+            // فقط خدماتی که تیک «درج خودکار مهر و امضا» دارند مهر می‌خورند
+            if (svc?.has_signature) {
+              sealedFile = await sealPdfFileWithDoctorStamp(
+                rawFile,
+                queueItem.doctor,
+                {
+                  opacity: 0.9,
+                  signature:
+                    svc.signature_x !== null && svc.signature_y !== null
+                      ? {
+                          x: svc.signature_x,
+                          y: svc.signature_y,
+                          page: svc.signature_page,
+                        }
+                      : { x: null, y: null, page: svc.signature_page },
+                },
+              );
+            }
 
             processedFiles.push(sealedFile);
             formData.append("files[]", sealedFile);
@@ -1535,7 +1584,10 @@ export default function LabResultsManagement() {
                                 disabled={isVisitLocked}
                                 className="h-8 text-xs mt-1"
                                 onChange={(e) =>
-                                  handleCustomNameChange(e.target.value)
+                                  handleCustomNameChange(
+                                    service.id,
+                                    e.target.value,
+                                  )
                                 }
                               />
                             )}
