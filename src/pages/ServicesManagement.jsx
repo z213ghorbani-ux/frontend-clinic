@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router";
 import {
   Layers,
@@ -10,6 +10,7 @@ import {
   ArrowRight,
   Loader2,
   Stethoscope,
+  ImagePlus,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -45,6 +46,66 @@ export default function ServicesManagement() {
 
   const [formData, setFormData] = useState({ ...emptyForm });
 
+  // سربرگ (تصویر) فایل پیوست
+  const [headerFile, setHeaderFile] = useState(null);
+  const [headerPreview, setHeaderPreview] = useState("");
+  const [removeHeader, setRemoveHeader] = useState(false);
+  const previewUrlRef = useRef("");
+  const headerRequestRef = useRef(null);
+
+  const clearHeaderPreviewUrl = () => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = "";
+    }
+  };
+
+  const showHeaderPreview = (blobOrFile) => {
+    clearHeaderPreviewUrl();
+    const url = URL.createObjectURL(blobOrFile);
+    previewUrlRef.current = url;
+    setHeaderPreview(url);
+  };
+
+  const resetHeaderState = () => {
+    headerRequestRef.current = null;
+    clearHeaderPreviewUrl();
+    setHeaderFile(null);
+    setHeaderPreview("");
+    setRemoveHeader(false);
+  };
+
+  useEffect(() => {
+    return () => clearHeaderPreviewUrl();
+  }, []);
+
+  const handleHeaderFileChange = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    if (!["image/png", "image/jpeg"].includes(file.type)) {
+      setErrorMsg("سربرگ باید تصویر PNG یا JPG باشد.");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setErrorMsg("حجم تصویر سربرگ نباید بیشتر از ۵ مگابایت باشد.");
+      return;
+    }
+
+    setErrorMsg("");
+    setHeaderFile(file);
+    setRemoveHeader(false);
+    showHeaderPreview(file);
+  };
+
+  const handleRemoveHeader = () => {
+    clearHeaderPreviewUrl();
+    setHeaderFile(null);
+    setHeaderPreview("");
+    setRemoveHeader(true);
+  };
+
   // دریافت ساختار درختی خدمات از بک‌اند
   const fetchServices = useCallback(async () => {
     try {
@@ -67,6 +128,7 @@ export default function ServicesManagement() {
 
   // باز کردن فرم برای تعریف خدمت والد (دسته‌بندی اصلی)
   const handleOpenParentForm = () => {
+    resetHeaderState();
     setEditingItem(null);
     setSelectedParent(null);
     setFormData({ ...emptyForm, price: "0" });
@@ -77,6 +139,7 @@ export default function ServicesManagement() {
 
   // باز کردن فرم برای افزودن زیرخدمت به یک والد مشخص
   const handleOpenChildForm = (parent) => {
+    resetHeaderState();
     setEditingItem(null);
     setSelectedParent(parent);
     setFormData({ ...emptyForm, parent_id: parent.id });
@@ -87,7 +150,23 @@ export default function ServicesManagement() {
 
   // باز کردن فرم در حالت ویرایش یک رکورد
   const handleOpenEditForm = (item) => {
+    resetHeaderState();
     setEditingItem(item);
+
+    // پیش‌نمایش سربرگ ذخیره‌شده (در صورت وجود)
+    if (item.has_header) {
+      const requestedId = item.id;
+      headerRequestRef.current = requestedId;
+      api
+        .get(`/services/${item.id}/header`, { responseType: "blob" })
+        .then((res) => {
+          if (headerRequestRef.current === requestedId) {
+            showHeaderPreview(res.data);
+          }
+        })
+        .catch((err) => console.error("خطا در دریافت سربرگ:", err));
+    }
+
     const parent = item.parent_id
       ? categories.find((c) => c.id === item.parent_id) || null
       : null;
@@ -119,6 +198,7 @@ export default function ServicesManagement() {
 
   // بستن فرم
   const handleCloseForm = () => {
+    resetHeaderState();
     setIsFormOpen(false);
     setEditingItem(null);
     setSelectedParent(null);
@@ -175,16 +255,44 @@ export default function ServicesManagement() {
           : null,
       };
 
+      let savedId;
       if (editingItem) {
         await api.put(`/services/${editingItem.id}`, payload);
+        savedId = editingItem.id;
         setSuccessMsg("خدمت با موفقیت ویرایش شد.");
       } else {
-        await api.post("/services", payload);
+        const created = await api.post("/services", payload);
+        savedId = created.data?.data?.id;
         setSuccessMsg("خدمت جدید با موفقیت ثبت شد.");
+      }
+
+      // آپلود یا حذف سربرگ (بعد از ذخیره‌ی خدمت)
+      let headerError = "";
+      if (savedId) {
+        try {
+          if (headerFile) {
+            const fd = new FormData();
+            fd.append("header", headerFile);
+            await api.post(`/services/${savedId}/header`, fd);
+          } else if (removeHeader && editingItem?.has_header) {
+            await api.delete(`/services/${savedId}/header`);
+          }
+        } catch (hErr) {
+          console.error(hErr);
+          headerError =
+            hErr.response?.data?.errors?.header?.[0] ||
+            hErr.response?.data?.message ||
+            "خطا در ذخیره‌ی سربرگ";
+        }
       }
 
       handleCloseForm();
       fetchServices();
+
+      if (headerError) {
+        setSuccessMsg("");
+        setErrorMsg(`خدمت ذخیره شد ولی سربرگ ذخیره نشد: ${headerError}`);
+      }
     } catch (err) {
       console.error(err);
       const resErrors = err.response?.data?.errors;
@@ -457,6 +565,58 @@ export default function ServicesManagement() {
                   )}
                 </div>
 
+                {/* سربرگ فایل پیوست */}
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3 sm:col-span-2 md:col-span-4">
+                  <label className="text-sm font-bold text-slate-700">
+                    سربرگ فایل پیوست این خدمت
+                  </label>
+                  <p className="text-[11px] text-slate-500">
+                    تصویر سربرگ (PNG یا JPG، حداکثر ۵ مگابایت) با عرض کامل در
+                    بالای صفحه اول فایل PDF پیوست درج می‌شود. فایل باید در بالای
+                    صفحه فضای خالی داشته باشد، چون سربرگ روی محتوا قرار می‌گیرد.
+                    تغییرات فقط روی فایل‌های جدید اعمال می‌شود.
+                  </p>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100">
+                      <ImagePlus className="h-4 w-4" />
+                      {headerPreview
+                        ? "تغییر تصویر سربرگ"
+                        : "انتخاب تصویر سربرگ"}
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg"
+                        className="hidden"
+                        onChange={handleHeaderFileChange}
+                        disabled={isSubmitting}
+                      />
+                    </label>
+
+                    {headerPreview && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRemoveHeader}
+                        disabled={isSubmitting}
+                        className="text-red-600 hover:text-red-700"
+                      >
+                        حذف سربرگ
+                      </Button>
+                    )}
+                  </div>
+
+                  {headerPreview && (
+                    <div className="rounded-lg border border-slate-200 bg-white p-2">
+                      <img
+                        src={headerPreview}
+                        alt="پیش‌نمایش سربرگ"
+                        className="w-full max-h-40 object-contain"
+                      />
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex items-center justify-end gap-2 md:col-span-4 pt-2 border-t border-indigo-100">
                   <Button
                     type="button"
@@ -519,7 +679,11 @@ export default function ServicesManagement() {
                         </span>
                         <div>
                           <div className="flex items-center gap-2">
-                            <h3 className="text-sm font-bold text-slate-800">
+                            <h3
+                              className="text-sm font-bold text-slate-800 cursor-pointer hover:text-indigo-600"
+                              onClick={() => handleOpenEditForm(cat)}
+                              title="کلیک برای ویرایش"
+                            >
                               {cat.name}
                             </h3>
                             {cat.is_visit && (
@@ -535,6 +699,11 @@ export default function ServicesManagement() {
                             {cat.has_signature && (
                               <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 border border-amber-200">
                                 مهر خودکار
+                              </span>
+                            )}
+                            {cat.has_header && (
+                              <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700 border border-sky-200">
+                                سربرگ
                               </span>
                             )}
                           </div>
@@ -601,7 +770,11 @@ export default function ServicesManagement() {
                             className="flex flex-wrap items-center justify-between rounded-xl bg-slate-50 p-2.5 text-xs text-slate-700"
                           >
                             <div className="flex items-center gap-3">
-                              <span className="font-semibold text-slate-800">
+                              <span
+                                className="font-semibold text-slate-800 cursor-pointer hover:text-indigo-600"
+                                onClick={() => handleOpenEditForm(child)}
+                                title="کلیک برای ویرایش"
+                              >
                                 {child.name}
                               </span>
                               {child.code && (

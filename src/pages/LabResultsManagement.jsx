@@ -334,6 +334,71 @@ const sealPdfFileWithDoctorStamp = async (pdfFile, doctor, options = {}) => {
   }
 };
 
+// دریافت تصویر سربرگ یک خدمت از سرور (API احرازهویت‌شده)
+const fetchServiceHeaderBytes = async (serviceDbId) => {
+  if (!serviceDbId) return null;
+  try {
+    const res = await api.get(`/services/${serviceDbId}/header`, {
+      responseType: "arraybuffer",
+    });
+    return res.data;
+  } catch (err) {
+    console.error("خطا در دریافت سربرگ خدمت:", err);
+    return null;
+  }
+};
+
+/**
+ * درج سربرگ در بالای صفحه اول فایل PDF
+ * عرض سربرگ برابر عرض صفحه و ارتفاعش متناسب با تصویر است.
+ * سربرگ روی محتوا قرار می‌گیرد، پس فایل باید در بالای صفحه فضای خالی داشته باشد.
+ */
+const addHeaderToPdfFile = async (pdfFile, headerImageBytes) => {
+  try {
+    if (!pdfFile || !headerImageBytes) return pdfFile;
+
+    const isPdf =
+      pdfFile.type === "application/pdf" ||
+      pdfFile.name?.toLowerCase().endsWith(".pdf");
+
+    if (!isPdf) return pdfFile;
+
+    const pdfDoc = await PDFDocument.load(await pdfFile.arrayBuffer());
+
+    const headerImage = await embedImageSafely(pdfDoc, headerImageBytes);
+    if (!headerImage) return pdfFile;
+
+    const pages = pdfDoc.getPages();
+    if (!pages || pages.length === 0) return pdfFile;
+
+    const firstPage = pages[0];
+    const { width, height } = firstPage.getSize();
+
+    const drawWidth = width;
+    const drawHeight = Math.min(
+      (headerImage.height / headerImage.width) * drawWidth,
+      height,
+    );
+
+    firstPage.drawImage(headerImage, {
+      x: 0,
+      y: height - drawHeight,
+      width: drawWidth,
+      height: drawHeight,
+    });
+
+    const modifiedPdfBytes = await pdfDoc.save();
+
+    return new File([modifiedPdfBytes], pdfFile.name, {
+      type: "application/pdf",
+      lastModified: Date.now(),
+    });
+  } catch (err) {
+    console.error("خطا در درج سربرگ روی PDF:", err);
+    return pdfFile;
+  }
+};
+
 export default function LabResultsManagement() {
   const [doctorsList, setDoctorsList] = useState([]);
   const [patientsSearchResults, setPatientsSearchResults] = useState([]);
@@ -410,6 +475,9 @@ export default function LabResultsManagement() {
                 ? Number(item.signature_y)
                 : null,
             signature_page: item.signature_page || "last",
+            // شناسه‌ی واقعی خدمت در دیتابیس و وجود سربرگ
+            dbId: item.id,
+            has_header: Boolean(item.has_header),
           }));
 
           setServicesList(formatted);
@@ -1080,6 +1148,8 @@ export default function LabResultsManagement() {
 
       const allServices = [];
       const processedFiles = [];
+      // کش تصویر سربرگ هر خدمت تا برای چند فایل یک‌بار دریافت شود
+      const headerBytesCache = new Map();
 
       for (const queueItem of temporaryQueue) {
         const itemDoctorId = queueItem.doctor?.id || queueItem.doctorId || "";
@@ -1112,10 +1182,24 @@ export default function LabResultsManagement() {
 
             let sealedFile = rawFile;
 
+            // سربرگ خدمت (بالای صفحه اول PDF)
+            if (svc?.has_header && svc.dbId) {
+              if (!headerBytesCache.has(svc.dbId)) {
+                headerBytesCache.set(
+                  svc.dbId,
+                  await fetchServiceHeaderBytes(svc.dbId),
+                );
+              }
+              const headerBytes = headerBytesCache.get(svc.dbId);
+              if (headerBytes) {
+                sealedFile = await addHeaderToPdfFile(sealedFile, headerBytes);
+              }
+            }
+
             // فقط خدماتی که تیک «درج خودکار مهر و امضا» دارند مهر می‌خورند
             if (svc?.has_signature) {
               sealedFile = await sealPdfFileWithDoctorStamp(
-                rawFile,
+                sealedFile,
                 queueItem.doctor,
                 {
                   opacity: 0.9,
