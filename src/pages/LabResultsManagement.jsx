@@ -32,6 +32,9 @@ const MM_TO_PT = 72 / 25.4;
 // عرض پیش‌فرض مهر هنگام استفاده از مختصات خدمت (میلی‌متر)
 const SIGNATURE_STAMP_WIDTH_MM = 50;
 
+// پیام خطای خدماتی که پیوست فایل برایشان اجباری است
+const REQUIRED_ATTACHMENT_MSG = "برای این خدمت نیاز به فایل ضمیمه است";
+
 // تابع کمکی جامع برای خواندن دقیق اطلاعات کاربر لاگین‌شده از LocalStorage
 const getCurrentUser = () => {
   try {
@@ -475,6 +478,8 @@ export default function LabResultsManagement() {
                 ? Number(item.signature_y)
                 : null,
             signature_page: item.signature_page || "last",
+            // پیوست فایل برای این خدمت اجباری است؟
+            requires_attachment: Boolean(item.requires_attachment),
             // شناسه‌ی واقعی خدمت در دیتابیس و وجود سربرگ
             dbId: item.id,
             has_header: Boolean(item.has_header),
@@ -765,6 +770,10 @@ export default function LabResultsManagement() {
     setShowPatientDropdown(false);
   };
 
+  // پیدا کردن تعریف خدمت (از لیست خدمات سرور) بر اساس serviceId انتخاب‌شده
+  const getServiceDef = (serviceId) =>
+    servicesList.find((sv) => String(sv.id) === String(serviceId));
+
   // تشخیص خدمت ویزیت پایه از ساختارهای مختلفی که ممکن است از بک‌اند برگردد.
   const isBaseVisitService = (service) =>
     Boolean(
@@ -908,6 +917,20 @@ export default function LabResultsManagement() {
     // لیست موقت پایین یا از قبل به‌صورت تاییدشده وجود داشته باشد.
     if (!hasAnyVisit) {
       toast.error("ابتدا باید یک ویزیت پایه انتخاب یا ثبت کنید.");
+      return;
+    }
+
+    // خدماتی که پیوست فایل برایشان اجباری است باید فایل داشته باشند
+    const missingRequiredFiles = selectedServices.filter(
+      (s) => getServiceDef(s.serviceId)?.requires_attachment && !s.file,
+    );
+    if (missingRequiredFiles.length > 0) {
+      toast.error(REQUIRED_ATTACHMENT_MSG, {
+        description: missingRequiredFiles
+          .map((s) => s.serviceTitle)
+          .filter(Boolean)
+          .join("، "),
+      });
       return;
     }
 
@@ -1107,6 +1130,27 @@ export default function LabResultsManagement() {
       return;
     }
 
+    // گارد پیوست اجباری: هر خدمتِ دارای «پیوست اجباری» باید فایل داشته باشد
+    // (فایل در حافظه یا فایل ذخیره‌شده در پیش‌نویس سرور).
+    const missingRequiredTitles = [];
+    temporaryQueue.forEach((qItem) => {
+      (qItem.services || []).forEach((s) => {
+        const def = getServiceDef(s.serviceId);
+        if (def?.requires_attachment && !s.file && !s.remoteFile) {
+          missingRequiredTitles.push(
+            s.serviceId === "other" ? s.customName || "سایر" : s.serviceTitle,
+          );
+        }
+      });
+    });
+
+    if (missingRequiredTitles.length > 0) {
+      toast.error(REQUIRED_ATTACHMENT_MSG, {
+        description: missingRequiredTitles.filter(Boolean).join("، "),
+      });
+      return;
+    }
+
     isSubmittingRef.current = true;
     setIsSubmitting(true);
 
@@ -1155,6 +1199,11 @@ export default function LabResultsManagement() {
         const itemDoctorId = queueItem.doctor?.id || queueItem.doctorId || "";
 
         for (const [idx, s] of queueItem.services.entries()) {
+          // تعریف خدمت (از «مدیریت خدمات») برای مهر، سربرگ و پیوست اجباری
+          const svc = servicesList.find(
+            (sv) => String(sv.id) === String(s.serviceId),
+          );
+
           const serviceItem = {
             service_code:
               s.serviceCode ||
@@ -1163,6 +1212,8 @@ export default function LabResultsManagement() {
               s.serviceCode ||
               (getServiceCode ? getServiceCode(s.serviceId) : s.serviceId),
             serviceId: s.serviceId,
+            // شناسه واقعی خدمت در دیتابیس (برای بررسی پیوست اجباری در سرور)
+            serviceDbId: svc?.dbId ?? null,
             serviceTitle:
               s.serviceId === "other" ? s.customName || "سایر" : s.serviceTitle,
             doctorName:
@@ -1174,12 +1225,14 @@ export default function LabResultsManagement() {
 
           const rawFile = await resolveServiceFile(queueItem.draftId, idx, s);
 
-          if (rawFile) {
-            // تنظیمات مهر همین خدمت (از تعریف خدمت در «مدیریت خدمات»)
-            const svc = servicesList.find(
-              (sv) => String(sv.id) === String(s.serviceId),
+          if (!rawFile && svc?.requires_attachment) {
+            // فایل پیوست اجباری قابل دریافت نبود (مثلاً از سرور حذف شده)
+            throw new Error(
+              `${REQUIRED_ATTACHMENT_MSG}: «${serviceItem.serviceTitle}»`,
             );
+          }
 
+          if (rawFile) {
             let sealedFile = rawFile;
 
             // سربرگ خدمت (بالای صفحه اول PDF)
@@ -1218,6 +1271,11 @@ export default function LabResultsManagement() {
             processedFiles.push(sealedFile);
             formData.append("files[]", sealedFile);
             formData.append("file_doctors[]", itemDoctorId);
+            // شناسه خدمتِ این فایل (هم‌اندیس با files[]) برای بررسی پیوست اجباری در سرور
+            formData.append(
+              "file_services[]",
+              String(svc?.dbId ?? s.serviceId ?? ""),
+            );
           }
         }
       }
@@ -1320,6 +1378,7 @@ export default function LabResultsManagement() {
       console.error("خطا در ثبت نهایی:", error);
       const serverMessage =
         error.response?.data?.message ||
+        error.message ||
         "خطا در ثبت اطلاعات در سرور. لطفاً دوباره تلاش کنید.";
       toast.error(serverMessage);
     } finally {
@@ -1591,6 +1650,13 @@ export default function LabResultsManagement() {
                     const isChecked = selectedServices.some(
                       (s) => s.serviceId === service.id,
                     );
+                    const selectedEntry = selectedServices.find(
+                      (s) => s.serviceId === service.id,
+                    );
+                    const needsFile =
+                      Boolean(service.requires_attachment) &&
+                      isChecked &&
+                      !selectedEntry?.file;
 
                     // ویزیت قفل است اگر پرونده قفل باشد یا قبلاً
                     // ویزیتی در فرم/لیست موقت ثبت شده باشد.
@@ -1639,6 +1705,14 @@ export default function LabResultsManagement() {
                               ویزیت پایه
                             </Badge>
                           )}
+                          {service.requires_attachment && (
+                            <Badge
+                              variant="outline"
+                              className={`${isVisit ? "" : "mr-auto "}text-[10px] border-rose-200 text-rose-700`}
+                            >
+                              پیوست اجباری
+                            </Badge>
+                          )}
                         </label>
 
                         {!isVisit && !hasAnyVisit && (
@@ -1661,6 +1735,12 @@ export default function LabResultsManagement() {
                               }
                               className="text-xs block w-full file:mr-0 file:ml-2 file:py-1 file:px-2 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20 disabled:opacity-50"
                             />
+
+                            {needsFile && (
+                              <p className="text-[11px] text-rose-600">
+                                {REQUIRED_ATTACHMENT_MSG}.
+                              </p>
+                            )}
 
                             {service.id === "other" && (
                               <Input
@@ -1772,6 +1852,11 @@ export default function LabResultsManagement() {
                             {s.file || s.remoteFile ? (
                               <span className="text-[11px] text-emerald-600 font-mono">
                                 ({(s.file || s.remoteFile).name})
+                              </span>
+                            ) : getServiceDef(s.serviceId)
+                                ?.requires_attachment ? (
+                              <span className="text-[11px] text-rose-600">
+                                {REQUIRED_ATTACHMENT_MSG}
                               </span>
                             ) : null}
                           </div>

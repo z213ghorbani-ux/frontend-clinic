@@ -29,6 +29,7 @@ const emptyForm = {
   signature_x: "",
   signature_y: "",
   signature_page: "last",
+  requires_attachment: false,
 };
 
 export default function ServicesManagement() {
@@ -190,6 +191,7 @@ export default function ServicesManagement() {
           ? String(item.signature_y)
           : "",
       signature_page: item.signature_page || "last",
+      requires_attachment: Boolean(item.requires_attachment),
     });
     setIsFormOpen(true);
     setErrorMsg("");
@@ -253,6 +255,7 @@ export default function ServicesManagement() {
         signature_page: formData.has_signature
           ? formData.signature_page || "last"
           : null,
+        requires_attachment: Boolean(formData.requires_attachment),
       };
 
       let savedId;
@@ -455,6 +458,25 @@ export default function ServicesManagement() {
                     />
                     <Stethoscope className="h-4 w-4 text-emerald-600" />
                     خدمت از نوع ویزیت است
+                  </label>
+                </div>
+
+                {/* پیوست اجباری در پنل جوابدهی */}
+                <div className="flex items-center gap-2 pt-2 sm:col-span-2 md:col-span-4">
+                  <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={formData.requires_attachment || false}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          requires_attachment: e.target.checked,
+                        })
+                      }
+                      disabled={isSubmitting}
+                      className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    پیوست فایل برای این خدمت اجباری است (در پنل جوابدهی)
                   </label>
                 </div>
 
@@ -706,6 +728,11 @@ export default function ServicesManagement() {
                                 سربرگ
                               </span>
                             )}
+                            {cat.requires_attachment && (
+                              <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700 border border-rose-200">
+                                پیوست اجباری
+                              </span>
+                            )}
                           </div>
                           {Number(cat.price) > 0 && (
                             <p className="text-[11px] text-slate-400 mt-0.5">
@@ -785,6 +812,11 @@ export default function ServicesManagement() {
                               {child.is_visit && (
                                 <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700 border border-emerald-200">
                                   ویزیت
+                                </span>
+                              )}
+                              {child.requires_attachment && (
+                                <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[9px] font-semibold text-rose-700 border border-rose-200">
+                                  پیوست اجباری
                                 </span>
                               )}
                               <span className="font-bold text-indigo-600">
